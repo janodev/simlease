@@ -1,7 +1,7 @@
 ---
 type: Roadmap
 title: Session Safety Roadmap and Decision Log
-description: Records delivery order, accepted architecture choices, future proposals, and unresolved session details.
+description: Records implemented session milestones, remaining recovery work, future proposals, and settled safety choices.
 tags: [roadmap, decisions, sessions, reliability]
 timestamp: 2026-07-15T00:00:00Z
 status: active
@@ -9,113 +9,116 @@ status: active
 
 # Status Vocabulary
 
-* **Implemented baseline** - Present at commit `7df4924` and described in
-  [current architecture](current-architecture.md).
-* **Accepted target** - Settled behavior required for the first safe session
-  runner, but not implemented at the baseline.
-* **Future proposal** - Deliberately deferred until the accepted target is proven.
-* **Open detail** - Requires a focused decision without changing accepted safety
-  invariants.
+* **Implemented** - Present in source and covered at an appropriate current test
+  layer.
+* **Partial** - Useful behavior is implemented, but a named architecture,
+  recovery, UI, or evidence gap remains.
+* **Future proposal** - Deliberately deferred until the foreground lifecycle is
+  stable.
 
 # Delivery Roadmap
 
-| Stage | Status at baseline | Deliverable | Exit criteria |
+| Stage | Status | Deliverable | Remaining exit work |
 |---|---|---|---|
-| 0. Cooperative leases | Implemented baseline | `claim`, `renew`, `release`, registry UI, TTL GC. | Existing behavior remains accurately documented and tested. |
-| 1. Reliability foundation | Accepted target | Kernel-backed global lock and strict checked `simctl` discovery/lifecycle APIs. | Cross-process kill/timeout tests and failed-command tests pass. |
-| 2. Foreground sessions | Accepted target | `simlease run [options] -- <command...>` with one unique disposable simulator per run. | Per-UDID lock spans create-to-cleanup, readiness precedes child launch, environment contract passes, same-worktree runs are independent. |
-| 3. Recovery and observability | Accepted target | Durable session phases, quarantine, delete-only abandoned-session reconciliation, status/app presentation. | Active locks override TTL; registry corruption and every partial-operation boundary fail safely. |
-| 4. Brokered sessions | Future proposal | Daemon or Unix-domain-socket broker for safe ownership across unrelated invocations. | Separate design review after foreground sessions are stable. |
-| 5. Warm performance | Future proposal | Templates, cloning, or other startup optimization. | Demonstrably preserves disposable isolation and all safety invariants. |
+| 0. Cooperative leases | Implemented compatibility | `claim`, `renew`, `release`, status, focus, registry UI, and TTL GC. | Keep documented as a lower-safety cooperative model. |
+| 1. Reliability foundation | Implemented | Kernel-backed global/per-device locks and strict checked `simctl` APIs. | Add focused close-on-exec inheritance evidence. |
+| 2. Foreground sessions | Implemented | `simlease run` and `with`, one disposable simulator per run, boot readiness, child environment, signals, and checked cleanup. | Add concurrent executable-level and automated real-Simulator coverage. |
+| 3. Recovery and observability | Partial | Session phases, quarantine, delete-only abandoned-session GC, fail-closed corruption, status/error presentation, and cleanup retry in the app. | Close the create-before-registry window and add per-UDID cancellation and recovery controls. |
+| 4. Brokered sessions | Future proposal | Daemon or Unix-domain-socket broker for safe reconnectable ownership across invocations. | Separate design review after foreground recovery is complete. |
+| 5. Warm performance | Future proposal | Templates, cloning, or another startup optimization. | Prove disposable isolation and every safety invariant remain intact. |
 
 # Decision Log
 
 ## 2026-07-15 - Foreground `run` is the safe workflow primitive
 
-**Accepted target.** The initial session API is `simlease run [options] --
-<command...>`. It supervises the complete lifecycle in one process. A `with`
-alias is optional, not required.
+**Implemented.** `simlease run [options] -- <command...>` supervises the whole
+lifecycle in one process; `simlease with` is an equivalent alias.
 
 Reason: one supervisor can retain kernel ownership across boot, arbitrary child
-work, and cleanup without relying on environment persistence between shells.
+work, and cleanup without trusting environment state between invocations.
 
 ## 2026-07-15 - Every run uses a unique disposable simulator
 
-**Accepted target.** Runs do not reuse a warm simulator and do not share by
-worktree. They create, boot, use, shut down, and delete one simulator.
+**Implemented.** Runs do not reuse warm devices and do not share by worktree.
 
 Reason: disposable state removes ambiguity around installed apps, settings,
-partial cleanup, sticky worktree ownership, and concurrent sessions in one tree.
+partial cleanup, sticky ownership, and same-tree concurrency.
 
 ## 2026-07-15 - Kernel lock is ownership authority
 
-**Accepted target.** A per-UDID Darwin `flock` is held for the session. Registry,
-TTL, labels, names, workdirs, and process metadata support visibility and recovery
-but cannot displace a live lock.
+**Implemented.** A per-UDID Darwin `flock` spans a published session. Registry,
+TTL, names, labels, and workdirs support visibility and recovery but cannot
+displace it.
 
-Reason: age-based lock stealing can revoke a slow live owner. Kernel ownership is
-released automatically when its descriptor closes or process exits.
+Reason: kernel ownership is not vulnerable to age-based stale-lock theft and is
+released automatically when the descriptor or supervisor exits.
 
 ## 2026-07-15 - Keep the global lock short
 
-**Accepted target.** A kernel-backed global control lock protects selection and
-registry transitions. The per-UDID lock, not the global lock, spans the workflow.
+**Partially implemented.** Boot and child work run outside the global lock, but
+final shutdown and deletion currently hold it alongside the per-UDID lock.
 
-Reason: independent sessions should run concurrently on separate simulators.
+Reason: independent sessions should proceed concurrently on different devices.
+Narrowing the final cleanup transaction remains a performance and availability
+improvement, not an ownership-correctness blocker.
 
 ## 2026-07-15 - Never unlink kernel lock files
 
-**Accepted target.** Release closes the descriptor and leaves the regular lock
-file in place.
+**Implemented.** Release closes the descriptor and leaves the lock file in
+place.
 
-Reason: unlinking permits one process to retain a lock on an old inode while a
-second process locks a new inode at the same path.
+Reason: unlinking can create two lockable inodes for one logical path.
 
 ## 2026-07-15 - Cleanup failures quarantine
 
-**Accepted target.** Failed shutdown, deletion, persistence, or interrupted
-sessions remain quarantined and delete-only. They are never reallocated.
+**Implemented.** Failed cleanup retains lifecycle metadata and makes the device
+delete-only. A later reconciliation can retry deletion.
 
-Reason: preserving capacity is less important than preventing simultaneous or
-state-contaminated use.
+Reason: preserving simulator capacity is less important than preventing shared
+or state-contaminated use.
 
-## 2026-07-15 - Simulator failures are explicit
+## 2026-07-15 - Registry corruption fails closed
 
-**Accepted target.** Session-critical commands validate exit status and
-structured output. Boot includes readiness waiting. Cleanup success is reported
-only after checked cleanup succeeds.
+**Implemented.** Existing undecodable data is retained, copied for diagnosis,
+and blocks lifecycle mutation.
 
-Reason: tool failure must not be reinterpreted as an empty inventory or a
-successful release.
+Reason: losing the ownership view must not make recorded devices appear free.
+
+## 2026-07-15 - Catchable signals are forwarded without escalation
+
+**Implemented with a known limit.** `SIGINT` and `SIGTERM` are forwarded to the
+child; the supervisor waits, cleans, and returns a signal-derived status.
+
+Reason: graceful child handling preserves cleanup today. A bounded grace period
+and escalation policy require a separate decision because forced termination can
+lose child-side evidence.
 
 ## 2026-07-15 - Legacy claims remain a separate safety class
 
-**Accepted documentation rule.** While `claim`, `renew`, and `release` remain,
-they are described as cooperative leases. Documentation must not apply `run`
-guarantees to them.
+**Implemented documentation rule.** `claim`, `renew`, and `release` remain
+cooperative and never inherit `run` guarantees.
 
-# Open Details
+# Next Recovery Work
 
-The following may be decided during implementation without weakening the target:
+1. Persist creation intent before `simctl create`, or design a conservative
+   reconciliation token that can identify only SimLease-owned orphans.
+2. Add executable-level concurrent session and close-on-exec inheritance tests.
+3. Automate a real disposable-Simulator smoke test behind an explicit opt-in.
+4. Add per-UDID cancellation, forced recovery, and cleanup history beyond the
+   menubar app's current error display and global-GC retry.
+5. Decide a grace deadline and escalation sequence for signal-ignoring children.
+6. Stop holding the global registry lock across final Simulator shutdown and
+   deletion while retaining durable cleanup state.
 
-* whether ArgumentParser can expose `with` as a clean alias;
-* precedence when both the child and cleanup fail, while still reporting both;
-* signal-forwarding and bounded child-termination policy;
-* quarantine retention, retry schedule, and human override commands;
-* exact registry schema and migration mechanics for session phases;
-* how the menubar app distinguishes active, abandoned, cleaning, and quarantined
-  sessions; and
-* compatibility and eventual deprecation policy for sticky legacy claims.
+# Future Decisions
 
-# Completion Gate
+The following remain intentionally open:
 
-Do not mark the session architecture implemented until:
+* broker lifecycle, authentication, stale-client detection, and reconnect rules;
+* registry schema evolution for a pre-create intent journal;
+* retention and human override policy for repeatedly failing quarantine cleanup;
+* compatibility and eventual deprecation policy for sticky legacy claims; and
+* warm-device optimization only after recovery evidence is complete.
 
-1. All invariants in [target session architecture](session-architecture.md) are
-   enforced by code.
-2. Applicable rows in the [failure matrix](testing-strategy.md) pass, including
-   independent subprocess and real disposable-Simulator coverage.
-3. README and agent skill examples prefer `simlease run` without overstating
-   legacy safety.
-4. Quarantine and recovery behavior is visible and actionable.
-5. The complete suite passes from a clean worktree.
+Use the [testing matrix](testing-strategy.md) as the evidence gate for moving a
+stage from partial to implemented.

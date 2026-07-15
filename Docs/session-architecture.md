@@ -1,19 +1,12 @@
 ---
 type: Architecture Decision
-title: Target Session-Oriented Architecture
-description: Defines the accepted workflow-wide isolation model for simlease run and its safety invariants.
-tags: [architecture, target-state, sessions, locking, safety]
+title: Foreground Session Architecture
+description: Defines the implemented simlease run lifecycle, ownership invariants, failure semantics, and remaining recovery work.
+tags: [architecture, sessions, locking, safety]
 timestamp: 2026-07-15T00:00:00Z
-status: accepted-target
-implemented: false
+status: implemented-v1
+implemented: true
 ---
-
-# Status Boundary
-
-This is the accepted target design. It is not implemented at the baseline in
-[current architecture](current-architecture.md). Future code and user-facing
-documentation must not describe these guarantees as available until their tests
-and implementation land together.
 
 # User Contract
 
@@ -23,142 +16,139 @@ The safe workflow entry point is:
 simlease run [options] -- <command> [arguments...]
 ```
 
-An optional `with` alias may be added if the CLI framework supports it cleanly.
-The alias is not part of the required contract.
+`simlease with` is an equivalent alias. A session:
 
-Each `run` session:
+* creates a uniquely named disposable simulator and unique session ID;
+* holds a per-UDID kernel lock from immediately after creation through cleanup;
+* waits for Simulator boot readiness before starting the child;
+* exports `SIMULATOR_ID`, `SIMULATOR_UDID`, and `SIMLEASE_SESSION_ID`;
+* preserves the child's standard input, output, and error streams;
+* uses checked shutdown and deletion before releasing ownership; and
+* remains independent from every other run, including runs in the same worktree.
 
-* creates a unique disposable simulator;
-* owns a unique session ID;
-* holds a per-UDID kernel lock from creation through command completion and
-  cleanup;
-* waits until the simulator is boot-ready before starting the child command;
-* exports `SIMULATOR_ID`, `SIMULATOR_UDID`, and `SIMLEASE_SESSION_ID` to the
-  child;
-* preserves the child process's standard input, output, and error streams;
-* shuts down and deletes the simulator before releasing ownership on normal
-  completion; and
-* treats same-worktree runs as independent sessions.
-
-The disposable model deliberately trades warm-device reuse for a narrow,
-auditable lifecycle with no prior app or settings state.
+The disposable model favors predictable isolation over warm-device reuse.
 
 # Authority Model
 
-Ownership sources, strongest first:
+Ownership sources are ordered by strength:
 
-1. The live per-UDID kernel lock is authoritative.
-2. Session metadata records lifecycle phase, owner diagnostics, and cleanup state.
-3. TTL, worktree, label, PID, and simulator name are observational or recovery
-   hints; none may revoke a live kernel lock.
+1. A live per-UDID Darwin `flock` is authoritative.
+2. Registry session metadata records lifecycle and recovery state.
+3. TTL, worktree, agent, label, and simulator name are diagnostic hints.
 
-The registry is not a substitute for the live lock. Registry corruption, clock
-jumps, an expired TTL, or a missing worktree must never make a lock-held simulator
-available.
+No metadata condition may displace a live kernel owner. A lockless registered
+session is abandoned and delete-only; it is never a reusable simulator.
 
-# Session Lifecycle
+# Implemented Lifecycle
 
-The target supervisor performs these phases:
+1. **Create** - Under the global registry lock, resolve the device type and
+   runtime and create a uniquely named private simulator.
+2. **Own** - Acquire the UDID lock without waiting and persist the session in
+   `created` state. If locking or persistence fails, attempt immediate shutdown
+   and deletion.
+3. **Boot** - Release the global lock, persist `booting`, execute `boot`, and
+   block on `bootstatus <UDID> -b` while retaining the UDID lock.
+4. **Run** - Persist `running` and start the child with the session environment
+   and inherited streams.
+5. **Clean** - Reacquire the global registry lock, persist `cleaning`, perform
+   checked shutdown and deletion while both locks are held, then remove the
+   registry record and release the global lock.
+6. **Unlock** - Release the UDID lock only after successful cleanup. On cleanup
+   failure, persist `quarantined`, report the error, and retain ownership until
+   the supervisor ends.
 
-1. **Intent** - Generate a session ID and persist enough intent to identify an
-   interrupted creation attempt.
-2. **Create** - Under the short global control lock, resolve the requested device
-   type and runtime, create a uniquely named disposable simulator, acquire its
-   per-UDID lock, and persist the UDID and session metadata.
-3. **Boot** - Release the global lock, boot the explicit UDID, and block on
-   `bootstatus` readiness while retaining the per-UDID lock.
-4. **Run** - Start the child with the three session environment variables and
-   retain the per-UDID lock until the child exits.
-5. **Clean** - With ownership still held, perform checked shutdown and deletion.
-   Persist completion only after cleanup succeeds.
-6. **Unlock** - Release the per-UDID lock last. Closing the descriptor, including
-   process exit or `SIGKILL`, releases the kernel lock; the lock file itself is
-   never unlinked.
-
-The supervisor owns the lock descriptor and marks it close-on-exec so the child
-cannot accidentally extend ownership beyond the supervisor's lifecycle.
+The registry has no completed row: successful deletion removes the record.
 
 # Safety Invariants
 
-| ID | Invariant |
+| ID | Implemented invariant |
 |---|---|
-| S1 | Every `run` creates a unique disposable simulator; no active or abandoned session simulator is reused. |
-| S2 | The per-UDID kernel lock is acquired immediately after `create` returns, before publication or boot, and is retained through successful deletion or quarantine transition. |
-| S3 | Same-worktree concurrency does not imply shared ownership; each run has a distinct session ID and simulator. |
-| S4 | Locks are released by closing descriptors, never by unlinking a path and never by age-based stealing. |
-| S5 | All allocation-critical `simctl` commands reject nonzero status, malformed JSON, and missing required payload shapes. Empty inventory is data, not a failure fallback. |
-| S6 | The child never starts before successful boot readiness. |
-| S7 | Cleanup failure is not reported as release success. The session becomes quarantined and remains delete-only. |
-| S8 | A lockless abandoned session is never returned to the allocation pool; reconciliation may only finish deleting it. |
-| S9 | GC cannot reclaim a simulator whose per-UDID lock is held, regardless of TTL or metadata. |
-| S10 | Durable recovery state preserves enough phase information to distinguish intent, active, cleaning, quarantined, and completed states. |
-| S11 | All Simulator operations use the explicit session UDID; names are presentation and recovery hints only. |
-| S12 | Setup, child, cleanup, and infrastructure failures are distinguishable in diagnostics and exit behavior. |
+| S1 | Every `run` creates a new disposable simulator; sessions never reuse pooled or abandoned devices. |
+| S2 | After `create` returns, the per-UDID lock is acquired before publication, boot, or child launch and remains held through cleanup. |
+| S3 | Same-worktree runs have distinct session IDs and UDIDs. |
+| S4 | Lock ownership ends by descriptor close, never by unlinking or age-based stealing. |
+| S5 | Allocation-critical `simctl` discovery rejects nonzero status, malformed JSON, unexpected shapes, and missing required identifiers. |
+| S6 | The child starts only after checked boot readiness succeeds. |
+| S7 | Cleanup failure retains a quarantined, delete-only record instead of reporting release success. |
+| S8 | GC does not reclaim a lock-held session regardless of TTL or worktree state. |
+| S9 | A lockless registered session may only be deleted, never adopted. |
+| S10 | After creation, all Simulator lifecycle operations use the explicit session UDID; names are presentation hints. |
+| S11 | Existing corrupt or unsupported registry data blocks mutation instead of becoming an empty ownership view. |
 
-# Kernel Lock Requirements
+# Kernel Locks
 
-Both the short global control lock and per-UDID session locks use a persistent
-regular file opened with `O_RDWR | O_CREAT | O_CLOEXEC`, mode `0600`, and held by
-Darwin `flock`.
+The global registry lock and per-UDID locks are persistent regular files opened
+with `O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW`, mode `0600`, and held with
+Darwin `flock`. Acquisition uses a monotonic deadline and retries interrupted
+system calls. Only `EWOULDBLOCK` and `EAGAIN` mean contention.
 
-Acquisition uses a monotonic deadline. It retries interrupted system calls and
-treats only `EWOULDBLOCK` or `EAGAIN` as contention. The lock file is never
-removed, avoiding split-inode ownership where old and new processes lock
-different files at the same path.
+Lock files stay in place after release. This prevents split-inode ownership,
+where one process retains an old inode while another locks a replacement at the
+same path. Close-on-exec prevents the child from inheriting the supervisor's
+ownership descriptor.
 
-The global lock protects selection and metadata transitions only. It is not held
-during boot, child execution, or Simulator cleanup. Per-device locks preserve
-parallelism across independent sessions.
+The global lock covers registry transitions, reconciliation, device resolution,
+creation, and initial publication. It is released before boot and child work so
+independent sessions can proceed on separate per-device locks. Final cleanup
+currently reacquires it across shutdown and deletion, serializing that boundary
+with allocation and other cleanup.
 
-# Simulator Command Requirements
+# Process and Exit Semantics
 
-The session supervisor uses checked APIs:
+The child runs through `/usr/bin/env` with ordinary terminal streams attached.
+When it exits normally, its status is returned after successful cleanup. If it
+dies from an uncaught signal, the supervisor returns `128 + signal`.
 
-* List operations validate exit status, JSON syntax, root type, and expected
-  payload shape.
-* Boot is `boot` followed by blocking `bootstatus <UDID> -b`.
-* Shutdown and deletion return actionable failures.
-* Errors include command, exit status, and stderr without silently converting a
-  tool failure into an empty device inventory.
+The supervisor installs dispatch signal sources for `SIGINT` and `SIGTERM`,
+forwards those signals to the active child, remembers the first forwarded
+signal, waits for the child, cleans the simulator, then returns `128 + signal`.
+There is currently no grace deadline or forced escalation for a child that
+ignores a forwarded signal.
 
-Source-compatible nonthrowing APIs may remain for legacy callers, but the session
-path must not use them.
+If setup and cleanup both fail, diagnostics retain the setup error and also emit
+the cleanup warning. If a child exits nonzero and cleanup then fails, cleanup is
+an infrastructure failure and may determine the reported command failure. Code
+must continue to test both diagnostics and final state when changing precedence.
 
-# Failure and Recovery Semantics
+# Recovery Semantics
 
-| Failure | Target response |
+| Failure | Implemented response |
 |---|---|
-| Setup fails before child launch | Do not run the child; clean or quarantine the disposable simulator while ownership is held. |
-| Child exits nonzero | Preserve its outcome, still perform cleanup, and report cleanup failure separately if present. |
-| Supervisor receives a catchable termination signal | Forward or terminate the child according to the process policy, then clean before unlocking. |
-| Supervisor is killed without cleanup | Kernel ownership drops automatically; the durable session becomes abandoned and delete-only. |
-| Registry is unreadable | Fail closed for lifecycle mutation; do not infer that recorded or lock-held devices are free. |
-| Cleanup command fails | Persist quarantine with the failure detail; never emit successful release and never reuse the simulator. |
-| TTL expires while lock is held | Keep the session active. TTL cannot steal kernel ownership. |
-
-Recovery must recognize an interrupted creation by session metadata and unique
-simulator naming. It may acquire an abandoned simulator's per-UDID lock and delete
-the simulator; it must never promote that simulator into a future run.
+| Setup fails before child launch | Skip the child and attempt checked cleanup while the lock remains held. |
+| Child exits nonzero | Attempt cleanup and preserve the child status when cleanup succeeds. |
+| Catchable termination | Forward to the child, wait, clean, and return the signal-derived status. |
+| Supervisor crash or `SIGKILL` after publication | Kernel ownership drops; the direct child may survive; the registry row remains and the next mutating reconciliation deletes the simulator. |
+| Existing registry bytes cannot decode, or use a newer schema | Retain the original and fail closed for lifecycle mutation. |
+| Cleanup fails | Persist `quarantined` plus failure detail; keep the simulator delete-only. |
+| TTL expires during a live session | Ignore expiry while its UDID lock is held. |
 
 # Compatibility Boundary
 
-The existing `claim`, `renew`, and `release` commands implement the cooperative
-legacy model. They must remain described as such while present. Adding `run` must
-not silently strengthen claims about legacy commands. Every legacy allocation
-path must nevertheless exclude active and quarantined session simulators; a
-legacy command cannot bypass the session lock authority.
+`claim`, `renew`, and `release` remain cooperative legacy commands. They do not
+inherit foreground-session guarantees. Legacy allocation must still exclude
+active, quarantined, abandoned, and visibly locked session simulators.
 
-Any future legacy deprecation or migration belongs in the
-[roadmap and decision log](roadmap-and-decisions.md).
+See [current architecture](current-architecture.md) for operational tradeoffs.
 
-# Explicit Future Work
+# Remaining Design Work
 
-The following are proposals, not part of the accepted initial `run` contract:
+The implemented lifecycle does not yet persist intent before `simctl create`.
+Therefore, a crash between creation and registry publication can leave a locked-
+name simulator that is safely excluded from allocation but cannot be proven safe
+for automatic deletion. A future intent journal or conservative name-to-intent
+reconciler must close this window.
 
-* a daemon or Unix-domain-socket broker for sessions spanning unrelated CLI
-  invocations;
-* warm disposable templates or cloning optimizations; and
-* attach, resume, or remote session-control protocols.
+The following remain future work:
 
-They may be designed only after the foreground session lifecycle and its
-[failure matrix](testing-strategy.md) are proven.
+* a broker or Unix-domain-socket service for reconnectable sessions across
+  unrelated invocations;
+* bounded signal grace periods and explicit escalation policy;
+* a narrower final-cleanup registry transaction that preserves recovery state
+  without holding the global lock across Simulator commands;
+* per-UDID cancel, forced recovery, and cleanup history beyond the menubar app's
+  current error presentation and global-GC retry; and
+* stronger recovery testing around persistence failures and real Simulator
+  partial-operation boundaries.
+
+Track delivery in [roadmap and decisions](roadmap-and-decisions.md) and evidence
+in [testing strategy](testing-strategy.md).

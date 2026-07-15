@@ -3,19 +3,23 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexissan/simlease/actions/workflows/ci.yml"><img src="https://github.com/alexissan/simlease/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/Swift-5.9+-F05138?logo=swift&logoColor=white" alt="Swift 5.9+">
-  <img src="https://img.shields.io/badge/macOS-14+-000000?logo=apple&logoColor=white" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/macOS-27+-000000?logo=apple&logoColor=white" alt="macOS 27+">
   <img src="https://img.shields.io/badge/license-MIT-2dd4bf" alt="MIT license">
 </p>
 
-When you run several AI coding agents in parallel — Claude Code sessions, Codex, multiple worktrees — they collide: one agent reinstalls over the simulator another is testing, and you end up staring at five identical iPhone windows with no idea which task each belongs to.
+When several coding agents build and test iOS apps in parallel, one can install
+over another's simulator, change its state, or close it mid-test. SimLease gives
+each complete workflow a private disposable simulator and keeps ownership for as
+long as the workflow runs.
 
-SimLease fixes both:
-
-- 🔒 **Leases** — an agent claims a simulator and owns it until it releases it (or the lease expires). Other agents automatically get a different device.
-- 🏷️ **Names** — the claimed simulator is renamed, so the window title literally reads `🔒 checkout-redesign · iPhone 17 Pro`. You always know which window is which task.
-- 📋 **A menubar board** — SimLease.app shows every lease (task, device, agent, time left). Click a row to bring that simulator's window to the front.
+- 🔒 **Crash-safe sessions** — `simlease run` creates a new simulator, retains a
+  kernel lock, waits for boot readiness, supervises a command, then deletes the
+  simulator.
+- 🏷️ **Recognizable windows** — session names include the task and a short
+  session ID, such as `🔒 checkout-redesign [A1B2C3D4] · iPhone 17 Pro`.
+- 📋 **A menubar board** — SimLease.app shows leases and session state, focuses
+  windows, reports status or cleanup errors, and can retry cleanup.
 
 <p align="center">
   <img src="assets/hero.png" alt="Two simulator windows named after their tasks" width="85%">
@@ -23,114 +27,144 @@ SimLease fixes both:
 
 ## Install
 
+This is a private repository; cloning requires access to `janodev/simlease`.
+
 ```bash
-git clone https://github.com/alexissan/simlease.git
+git clone https://github.com/janodev/simlease.git
 cd simlease
-make install          # installs the simlease CLI (PREFIX=/usr/local by default)
-make app              # builds dist/SimLease.app (the menubar board)
+make install          # installs the CLI; PREFIX=/usr/local by default
+make app              # builds dist/SimLease.app
 open dist/SimLease.app
 ```
 
-Requires macOS 14+ and Xcode (for `simctl`).
+Requires macOS 27+ and Xcode with an available iOS Simulator runtime.
 
-## 60-second quickstart
+## Quickstart
 
-```bash
-$ simlease claim --label "checkout-redesign"
-🔒 Assigned iPhone 17 Pro (199D590E) for "checkout-redesign"
-199D590E-8268-4E3E-A7E3-E13DACF9C0C7
-
-$ simlease status
-checkout-redesign  —  iPhone 17 Pro [Booted]  claude-code  1h 59m left
-    199D590E-8268-4E3E-A7E3-E13DACF9C0C7  /Users/you/dev/my-app
-
-$ simlease release
-🧹 Released iPhone 17 Pro ("checkout-redesign")
-```
-
-`claim` prints the UDID on stdout (everything human goes to stderr), so it drops straight into build scripts:
+Put the entire simulator workflow beneath one supervisor. A child script or
+shell receives the session variables after the private device is boot-ready:
 
 ```bash
-SIMULATOR_ID=$(simlease claim --label "$(git branch --show-current)")
-xcodebuild -destination "id=$SIMULATOR_ID" ...
+simlease run --label "checkout-redesign" -- zsh -lc '
+  set -euo pipefail
+  xcodebuild -scheme MyApp -destination "id=$SIMULATOR_ID" build
+  xcrun simctl install "$SIMULATOR_ID" path/to/MyApp.app
+  xcrun simctl launch "$SIMULATOR_ID" com.example.MyApp
+'
 ```
 
-## Using it with AI agents
-
-**Claude Code:** this repo ships a ready-made skill. Copy it and every session picks it up automatically:
+`simlease with` is an alias for `simlease run`. For exploratory work, start a
+child shell and keep it open for the complete workflow:
 
 ```bash
-cp -r skills/simlease ~/.claude/skills/          # all projects
-# or per-project:
-cp -r skills/simlease your-project/.claude/skills/
+simlease run --label "checkout-redesign" -- zsh
 ```
 
-**Any other agent** (Codex, Cursor, custom): add this to its instructions:
+Inside the child, SimLease exports:
+
+| Variable | Value |
+|---|---|
+| `SIMULATOR_ID` | The private simulator UDID. |
+| `SIMULATOR_UDID` | Alias of `SIMULATOR_ID` for tool compatibility. |
+| `SIMLEASE_SESSION_ID` | The unique lifecycle/session identifier. |
+
+Exiting the command or shell triggers checked shutdown and deletion. A nonzero
+child status is preserved when cleanup succeeds.
+
+## Using it with coding agents
+
+This repository ships an agent skill:
+
+```bash
+cp -r skills/simlease ~/.codex/skills/
+# or install it in another agent's supported skill directory
+```
+
+The essential instruction is:
 
 ```markdown
-## Simulators
-- Before building/running on a simulator, claim one: `SIMULATOR_ID=$(simlease claim)`
-- The claim is sticky per directory — re-running `simlease claim` returns the same device.
-- Renew during long sessions: `simlease renew`
-- When the task is done: `simlease release`
-- Never use a simulator whose name starts with 🔒 that you didn't claim.
+Run the whole simulator workflow under `simlease run --label "<task>" -- ...`.
+Use only the exported `SIMULATOR_ID`; never select or touch another 🔒 simulator.
 ```
 
-Each agent (or worktree, or session) claims from its own working directory, and the lease is keyed to that directory — parallel agents can't take each other's devices.
+Wrapping the whole workflow matters. Capturing a cooperative claim and running
+unrelated commands later does not retain the crash-safe session lock.
+
+## Crash and cleanup behavior
+
+- Normal completion, a child failure, or a boot-readiness failure attempts
+  checked shutdown and deletion before ownership is released.
+- On `SIGINT` or `SIGTERM`, SimLease forwards the signal to the child, waits for
+  it to finish, cleans the simulator, and returns a signal-derived status.
+- If the supervisor crashes or receives `SIGKILL` after publishing the session,
+  the kernel releases its lock automatically. The direct child may survive, and
+  the registry row remains abandoned and delete-only; the next `simlease gc`,
+  `claim`, or `run` attempts simulator cleanup.
+- If deletion fails, the row remains quarantined with failure information. Run
+  `simlease gc` to retry, or use **Retry Cleanup** in SimLease.app.
+
+TTL never revokes a live session lock. One narrow gap remains: a crash after
+Simulator creation but before registry publication can leave an unregistered
+`🔒` device. It is excluded from allocation, but cannot yet be automatically
+proven safe to delete. See [current limitations](Docs/current-architecture.md).
 
 ## The menubar board
 
-SimLease.app is a tiny menubar-only app that watches the lease registry:
+SimLease.app is a menu-only utility that watches the shared registry:
 
 <p align="center">
   <img src="assets/menubar.svg" alt="SimLease menubar board" width="80%">
 </p>
 
-- 🟢 booted / ⚪️ shut down, task label, device, agent, expired flag
-- Click a row → **Focus window**, **Release lease**, or **Copy UDID**
-- Reaps expired leases automatically every minute while running — device names are restored without anyone touching the CLI
-- **Run GC** to clean up immediately instead of waiting for the next sweep
+- Shows boot state, label, device, agent, and session lifecycle state.
+- Focuses a selected Simulator window and copies its UDID.
+- Shows registry/status and cleanup errors instead of silently hiding them.
+- Allows release for cooperative leases and retry cleanup for quarantined
+  sessions; active `run` sessions remain controlled by their supervisor.
+- Runs GC periodically and offers **Run GC** for immediate reconciliation.
 
 ## CLI reference
 
 | Command | Behavior |
 |---|---|
-| `simlease claim` | Claim/reuse a simulator for this directory. `--label` (default: git branch), `--agent`, `--device "iPhone 17 Pro"`, `--ttl 2h`, `--no-rename`, `--no-boot`, `--json`. Prints the UDID on stdout. |
-| `simlease release` | Free this directory's sim (or `--udid` / `--label`). Restores the original device name; deletes sims SimLease created. |
-| `simlease renew` | Extend the lease (default `--ttl 2h`). Call it from build scripts as a heartbeat. |
-| `simlease status` | Show all leases: task, device, state, agent, time left. `--json` for machines. |
-| `simlease gc` | Reap expired leases and leases whose working directory is gone. |
-| `simlease focus <label\|udid>` | Bring that simulator's window to the front (omit the argument for this directory's sim). |
+| `simlease run` / `simlease with` | Create a private disposable simulator, wait for readiness, run one command, and clean up. Options: `--label`, `--agent`, `--device`. |
+| `simlease status` | Show cooperative leases and session ID/state; use `--json` for the registry document. |
+| `simlease gc` | Reap expired legacy leases and retry delete-only abandoned or quarantined sessions. Never reaps a lock-held session. |
+| `simlease focus <label\|udid>` | Bring a leased Simulator window to the front; omit the argument for the current worktree's cooperative lease. |
+| `simlease claim` | Lower-safety compatibility command: claim or reuse a sticky simulator for this worktree. Prints its UDID on stdout. |
+| `simlease renew` | Extend the current worktree's cooperative lease TTL. |
+| `simlease release` | Release a cooperative lease, restore a reused name, or delete a device SimLease created. Active sessions reject external release. |
 
 ## How it works
 
-- The registry is a single JSON file at `~/.simlease/registry.json` — the CLI and the app share it, and you can read it yourself.
-- Allocator mutations are serialized through an atomic `mkdir` lock (`~/.simlease/lock`) with stale-lock stealing. Under ordinary short transactions, claims from distinct workdirs get different registered devices; see the documentation for concurrency limits.
-- Allocation is sticky: the same directory re-claims the same warm device (your app stays installed). Otherwise it takes a free device, preferring the newest iPhone Pros; if everything is taken it creates a fresh simulator on the latest iOS runtime.
-- Every lease has a TTL (default 2h). A crashed agent's lease expires; GC restores a reused simulator's name or deletes a simulator that SimLease created.
+- The CLI and app share schema-1 JSON at `~/.simlease/registry.json`. Set
+  `SIMLEASE_HOME` to isolate state in tests.
+- Mutations use a Darwin `flock` at `~/.simlease/registry.lock`. Each foreground
+  session also holds `~/.simlease/device-locks/<UDID>.lock` across boot, child
+  work, and cleanup.
+- Lock files are persistent regular files. SimLease closes descriptors to
+  release ownership and never steals or unlinks a lock by age.
+- Allocation-critical Simulator discovery validates process status and JSON.
+  Existing corrupt or unsupported registry data fails closed rather than
+  becoming an empty ownership view.
+- Registered lockless sessions are abandoned and delete-only. They can be
+  deleted during reconciliation but never reused.
 
-## FAQ
+## Cooperative compatibility commands
 
-**Does it mess with my simulators?**
-It renames a device while leased and restores the exact original name on release (or GC). It never deletes a simulator it didn't create itself.
+`claim`, `renew`, and `release` remain available for workflows that cannot fit
+beneath one foreground supervisor. A claim is sticky to its Git worktree and has
+a TTL, but it does not retain a kernel lock after the command exits. Processes
+in one worktree may share it, an expired lease can be reclaimed while still in
+use, and tools that ignore SimLease remain outside its protection.
 
-**What if an agent crashes without releasing?**
-The lease expires after its TTL. If SimLease.app is running it reaps the lease within a minute; otherwise the next `claim` or `gc` cleans it according to whether SimLease reused or created the simulator.
-
-**Does the other agent have to use SimLease too?**
-The lease is cooperative — agents using distinct workdirs and active leases avoid normal allocation collisions. Processes in one workdir share its sticky lease, and agents that ignore SimLease can still grab any device. The 🔒 in the device name makes "this one is taken" visible to both humans and models.
+Use a distinct worktree, pass the exact returned UDID to every command, renew
+before TTL expiry, and release explicitly. Prefer `run` whenever possible.
 
 ## Documentation
 
-Architecture, limitations, development guidance, testing expectations, and the
-accepted-but-not-yet-implemented session design are indexed in
-[`Docs/index.md`](Docs/index.md).
-
-## Roadmap
-
-- Homebrew tap
-- Notarized app releases
-- Per-task colors
+Architecture, development guidance, evidence, and remaining decisions are
+indexed in [`Docs/index.md`](Docs/index.md).
 
 ## License
 
