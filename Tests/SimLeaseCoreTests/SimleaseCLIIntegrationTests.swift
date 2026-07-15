@@ -7,6 +7,8 @@ private enum CLIFixtureError: Error {
     case missingExecutable(String)
 }
 
+private final class CLITestBundleToken: NSObject {}
+
 @Suite(.serialized)
 struct SimleaseCLIIntegrationTests {
     struct CommandResult {
@@ -25,11 +27,10 @@ struct SimleaseCLIIntegrationTests {
         let stateDirectory: URL
 
         init() throws {
-            let repository = URL(fileURLWithPath: #filePath)
+            // SwiftPM places products beside the test bundle for every configuration and scratch path.
+            let productsDirectory = Bundle(for: CLITestBundleToken.self).bundleURL
                 .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-            executable = repository.appendingPathComponent(".build/debug/simlease")
+            executable = productsDirectory.appendingPathComponent("simlease")
             guard FileManager.default.isExecutableFile(atPath: executable.path) else {
                 throw CLIFixtureError.missingExecutable(executable.path)
             }
