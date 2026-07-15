@@ -45,11 +45,14 @@ public struct Device: Equatable {
 
 public enum SimctlError: Error, CustomStringConvertible {
     case commandFailed(String, String)
+    case malformedResponse(String, String)
 
     public var description: String {
         switch self {
-        case .commandFailed(let command, let stderr):
-            return "simctl \(command) failed: \(stderr)"
+        case .commandFailed(let command, let detail):
+            return "simctl \(command) failed: \(detail)"
+        case .malformedResponse(let command, let detail):
+            return "simctl \(command) returned a malformed response: \(detail)"
         }
     }
 }
@@ -61,22 +64,73 @@ public struct Simctl {
         self.runner = runner
     }
 
+    @discardableResult
+    func runChecked(_ arguments: [String]) throws -> ProcessResult {
+        let result = try runner.run(["xcrun", "simctl"] + arguments)
+        return try check(result, for: arguments)
+    }
+
+    @discardableResult
+    func check(_ result: ProcessResult, for arguments: [String]) throws -> ProcessResult {
+        guard result.status == 0 else {
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = stderr.isEmpty
+                ? "exit status \(result.status)"
+                : "exit status \(result.status): \(stderr)"
+            throw SimctlError.commandFailed(arguments.joined(separator: " "), detail)
+        }
+        return result
+    }
+
     func listJSON(_ what: String, extra: [String] = []) throws -> [String: Any] {
-        let result = try runner.run(["xcrun", "simctl", "list", "-j", what] + extra)
+        let arguments = ["list", "-j", what] + extra
+        let result = try runChecked(arguments)
         let data = Data(result.stdout.utf8)
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        let object: Any
+        do {
+            object = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw SimctlError.malformedResponse(
+                arguments.joined(separator: " "),
+                "invalid JSON (\(error.localizedDescription))")
+        }
+        guard let dictionary = object as? [String: Any] else {
+            throw SimctlError.malformedResponse(
+                arguments.joined(separator: " "),
+                "expected a top-level object")
+        }
+        return dictionary
+    }
+
+    func listValue<Value>(_ what: String, extra: [String] = [], key: String,
+                          as _: Value.Type = Value.self) throws -> Value {
+        let response = try listJSON(what, extra: extra)
+        guard let value = response[key] as? Value else {
+            throw SimctlError.malformedResponse(
+                (["list", "-j", what] + extra).joined(separator: " "),
+                "expected '\(key)' with the documented shape")
+        }
+        return value
     }
 
     public func devices(availableOnly: Bool) throws -> [Device] {
         let extra = availableOnly ? ["available"] : []
-        let data = try listJSON("devices", extra: extra)["devices"] as? [String: [[String: Any]]] ?? [:]
+        let data: [String: [[String: Any]]] = try listValue(
+            "devices", extra: extra, key: "devices")
         var result: [Device] = []
         for (runtime, list) in data {
             for entry in list {
+                guard let udid = entry["udid"] as? String, !udid.isEmpty,
+                      let name = entry["name"] as? String, !name.isEmpty,
+                      let state = entry["state"] as? String, !state.isEmpty else {
+                    throw SimctlError.malformedResponse(
+                        (["list", "-j", "devices"] + extra).joined(separator: " "),
+                        "a device entry in '\(runtime)' is missing its UDID, name, or state")
+                }
                 result.append(Device(
-                    udid: entry["udid"] as? String ?? "",
-                    name: entry["name"] as? String ?? "?",
-                    state: entry["state"] as? String ?? "?",
+                    udid: udid,
+                    name: name,
+                    state: state,
                     runtime: runtime,
                     isAvailable: entry["isAvailable"] as? Bool ?? true))
             }
@@ -85,34 +139,75 @@ public struct Simctl {
     }
 
     public func create(name: String, deviceTypeID: String, runtimeID: String) throws -> String {
-        let result = try runner.run(["xcrun", "simctl", "create", name, deviceTypeID, runtimeID])
-        guard result.status == 0 else { throw SimctlError.commandFailed("create", result.stderr) }
-        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = try runChecked(["create", name, deviceTypeID, runtimeID])
+        let udid = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !udid.isEmpty else {
+            throw SimctlError.malformedResponse("create", "expected a non-empty simulator UDID")
+        }
+        return udid
     }
 
-    public func delete(_ udid: String) {
-        _ = try? runner.run(["xcrun", "simctl", "delete", udid])
+    public func deleteChecked(_ udid: String) throws {
+        let arguments = ["delete", udid]
+        let result = try runner.run(["xcrun", "simctl"] + arguments)
+        if result.status != 0, !result.indicatesMissingDevice {
+            try check(result, for: arguments)
+        }
     }
 
-    public func shutdown(_ udid: String) {
-        _ = try? runner.run(["xcrun", "simctl", "shutdown", udid])
+    public func shutdownChecked(_ udid: String) throws {
+        let arguments = ["shutdown", udid]
+        let result = try runner.run(["xcrun", "simctl"] + arguments)
+        if result.status != 0,
+           !result.indicatesAlreadyShutdown,
+           !result.indicatesMissingDevice {
+            try check(result, for: arguments)
+        }
     }
 
-    public func boot(_ udid: String) {
-        _ = try? runner.run(["xcrun", "simctl", "boot", udid])
+    public func bootChecked(_ udid: String) throws {
+        try runChecked(["boot", udid])
+    }
+
+    public func bootAndWait(_ udid: String) throws {
+        let bootArguments = ["boot", udid]
+        let bootResult = try runner.run(["xcrun", "simctl"] + bootArguments)
+        if bootResult.status != 0, !bootResult.indicatesAlreadyBooted {
+            try check(bootResult, for: bootArguments)
+        }
+        try runChecked(["bootstatus", udid, "-b"])
+    }
+
+    @discardableResult
+    public func delete(_ udid: String) -> Bool {
+        reportNonFatalFailure {
+            try deleteChecked(udid)
+        }
+    }
+
+    @discardableResult
+    public func shutdown(_ udid: String) -> Bool {
+        reportNonFatalFailure {
+            try shutdownChecked(udid)
+        }
+    }
+
+    @discardableResult
+    public func boot(_ udid: String) -> Bool {
+        reportNonFatalFailure {
+            try bootChecked(udid)
+        }
     }
 
     @discardableResult
     public func rename(_ udid: String, to name: String) -> Bool {
-        guard let result = try? runner.run(["xcrun", "simctl", "rename", udid, name]) else { return false }
-        if result.status != 0 {
-            FileHandle.standardError.write(Data("simlease: rename of \(udid.prefix(8)) failed (non-fatal)\n".utf8))
+        reportNonFatalFailure {
+            try runChecked(["rename", udid, name])
         }
-        return result.status == 0
     }
 
     public func preferredDeviceType(from preferred: [String]) throws -> (name: String, id: String)? {
-        let list = try listJSON("devicetypes")["devicetypes"] as? [[String: Any]] ?? []
+        let list: [[String: Any]] = try listValue("devicetypes", key: "devicetypes")
         var byName: [String: String] = [:]
         for deviceType in list {
             if let name = deviceType["name"] as? String, let id = deviceType["identifier"] as? String {
@@ -132,7 +227,7 @@ public struct Simctl {
     }
 
     public func latestIOSRuntime() throws -> String? {
-        let list = try listJSON("runtimes")["runtimes"] as? [[String: Any]] ?? []
+        let list: [[String: Any]] = try listValue("runtimes", key: "runtimes")
         return list
             .filter {
                 ($0["isAvailable"] as? Bool ?? false) && ($0["name"] as? String ?? "").hasPrefix("iOS")
@@ -142,5 +237,36 @@ public struct Simctl {
                     $1["version"] as? String ?? "", options: .numeric) == .orderedDescending
             }
             .first?["identifier"] as? String
+    }
+
+    private func reportNonFatalFailure(_ operation: () throws -> Void) -> Bool {
+        do {
+            try operation()
+            return true
+        } catch {
+            FileHandle.standardError.write(
+                Data("simlease: \(error) (non-fatal)\n".utf8))
+            return false
+        }
+    }
+}
+
+private extension ProcessResult {
+    var combinedOutput: String {
+        (stdout + "\n" + stderr).lowercased()
+    }
+
+    var indicatesAlreadyBooted: Bool {
+        combinedOutput.contains("current state: booted") || combinedOutput.contains("already booted")
+    }
+
+    var indicatesAlreadyShutdown: Bool {
+        combinedOutput.contains("current state: shutdown") || combinedOutput.contains("already shutdown")
+    }
+
+    var indicatesMissingDevice: Bool {
+        combinedOutput.contains("invalid device")
+            || combinedOutput.contains("unable to find device")
+            || combinedOutput.contains("device not found")
     }
 }
