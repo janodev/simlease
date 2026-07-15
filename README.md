@@ -105,9 +105,9 @@ SimLease.app is a tiny menubar-only app that watches the lease registry:
 ## How it works
 
 - The registry is a single JSON file at `~/.simlease/registry.json` — the CLI and the app share it, and you can read it yourself.
-- Claims are serialized through an atomic `mkdir` lock (`~/.simlease/lock`) with stale-lock stealing, so simultaneous claims from parallel agents always get distinct devices.
+- Allocator mutations are serialized through an atomic `mkdir` lock (`~/.simlease/lock`) with stale-lock stealing. Under ordinary short transactions, claims from distinct workdirs get different registered devices; see the documentation for concurrency limits.
 - Allocation is sticky: the same directory re-claims the same warm device (your app stays installed). Otherwise it takes a free device, preferring the newest iPhone Pros; if everything is taken it creates a fresh simulator on the latest iOS runtime.
-- Every lease has a TTL (default 2h). A crashed agent's lease expires and the device returns to the pool — GC restores its name automatically.
+- Every lease has a TTL (default 2h). A crashed agent's lease expires; GC restores a reused simulator's name or deletes a simulator that SimLease created.
 
 ## FAQ
 
@@ -115,10 +115,16 @@ SimLease.app is a tiny menubar-only app that watches the lease registry:
 It renames a device while leased and restores the exact original name on release (or GC). It never deletes a simulator it didn't create itself.
 
 **What if an agent crashes without releasing?**
-The lease expires after its TTL. If SimLease.app is running it reaps the lease within a minute; otherwise the next `claim` or `gc` restores the device name and frees it.
+The lease expires after its TTL. If SimLease.app is running it reaps the lease within a minute; otherwise the next `claim` or `gc` cleans it according to whether SimLease reused or created the simulator.
 
 **Does the other agent have to use SimLease too?**
-The lock is cooperative — agents that claim through SimLease never collide. Agents that ignore it can still grab any device, but the 🔒 in the device name makes "this one is taken" visible to both humans and models.
+The lease is cooperative — agents using distinct workdirs and active leases avoid normal allocation collisions. Processes in one workdir share its sticky lease, and agents that ignore SimLease can still grab any device. The 🔒 in the device name makes "this one is taken" visible to both humans and models.
+
+## Documentation
+
+Architecture, limitations, development guidance, testing expectations, and the
+accepted-but-not-yet-implemented session design are indexed in
+[`Docs/index.md`](Docs/index.md).
 
 ## Roadmap
 
