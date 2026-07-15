@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-public enum SessionState: String, Codable, Equatable {
+public enum SessionState: String, Codable, Equatable, Sendable {
     case booting
     case cleaning
     case created
@@ -9,7 +9,7 @@ public enum SessionState: String, Codable, Equatable {
     case running
 }
 
-public struct Lease: Codable, Equatable {
+public struct Lease: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case agent
         case claimedAt
@@ -54,7 +54,7 @@ public struct Lease: Codable, Equatable {
     }
 }
 
-public struct Registry: Codable, Equatable {
+public struct Registry: Codable, Equatable, Sendable {
     public static let currentSchema = 2
 
     public var schema: Int

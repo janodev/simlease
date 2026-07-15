@@ -24,7 +24,9 @@ in-process fakes:
   `SIMLEASE_HOME` and scripted `xcrun`;
 * command tests verify environment export, boot-readiness gating, child exit
   propagation, `SIGTERM` forwarding, cleanup, and delete-only GC after killing
-  the supervisor; and
+  the supervisor;
+* menu-board tests verify status loading leaves the main thread and overlapping
+  timer, watcher, or user refresh requests never run concurrently; and
 * injected `Simctl` tests make nonzero status, malformed JSON, missing fields,
   and checked lifecycle failures explicit.
 

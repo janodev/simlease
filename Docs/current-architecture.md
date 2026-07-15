@@ -33,7 +33,7 @@ install, launch, test, inspection, and screenshot workflow.
 | `LegacyMigrationLock` | Briefly uses v1's removable-directory protocol only while fencing schema 1 to schema 2. |
 | `RegistryStore` | Persists schema-2 JSON, migrates schema 1, and fails closed when an existing path is unreadable, corrupt, or uses an unsupported schema. |
 | `Simctl` | Validates discovery output and exposes checked create, boot-readiness, shutdown, and deletion operations. |
-| `SimLease.app` | Uses Observation for a titled menu-only board, displays leases plus status/cleanup errors, focuses windows, retries cleanup, and tears down its timers and watcher with the model lifecycle. |
+| `SimLease.app` | Uses Observation for a titled menu-only board, loads status snapshots away from the main actor, coalesces overlapping refresh triggers, displays status/cleanup errors, and tears down its tasks, timers, and watcher with the model lifecycle. |
 
 The implementation lives in [`Sources/SimLeaseCore`](../Sources/SimLeaseCore/),
 [`Sources/simlease`](../Sources/simlease/), and

@@ -23,6 +23,7 @@ let package = Package(
             ]
         ),
         .executableTarget(name: "SimLeaseApp", dependencies: ["SimLeaseCore"]),
+        .testTarget(name: "SimLeaseAppTests", dependencies: ["SimLeaseApp"]),
         .testTarget(name: "SimLeaseCoreTests", dependencies: ["SimLeaseCore"])
     ]
 )

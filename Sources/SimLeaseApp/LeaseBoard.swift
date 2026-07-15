@@ -2,11 +2,16 @@ import Foundation
 import Observation
 import SimLeaseCore
 
-struct BoardRow: Equatable, Identifiable {
+struct BoardRow: Equatable, Identifiable, Sendable {
     let id: String
     let lease: Lease
     let booted: Bool
     let expired: Bool
+}
+
+private enum RefreshResult: Sendable {
+    case failure(String)
+    case success([BoardRow])
 }
 
 @MainActor
@@ -18,10 +23,18 @@ final class LeaseBoard {
 
     @ObservationIgnored private var gcTask: Task<Void, Never>?
     @ObservationIgnored private var gcTimer: Timer?
+    @ObservationIgnored private var refreshPending = false
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var refreshTimer: Timer?
+    @ObservationIgnored private let statusLoader: @Sendable () throws -> [BoardRow]
     @ObservationIgnored private var watcher: DispatchSourceFileSystemObject?
 
-    init() {
+    init(
+        statusLoader: (@Sendable () throws -> [BoardRow])? = nil,
+        startAutomatically: Bool = true
+    ) {
+        self.statusLoader = statusLoader ?? { try LeaseBoard.loadRows() }
+        guard startAutomatically else { return }
         refresh()
         watchRegistry()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -33,9 +46,10 @@ final class LeaseBoard {
         }
     }
 
-    deinit {
+    isolated deinit {
         gcTask?.cancel()
         gcTimer?.invalidate()
+        refreshTask?.cancel()
         refreshTimer?.invalidate()
         watcher?.cancel()
     }
@@ -45,18 +59,51 @@ final class LeaseBoard {
     }
 
     func refresh() {
-        do {
-            let result = try Allocator().status()
-            let now = Date()
-            rows = result.map { row in
-                BoardRow(id: row.udid, lease: row.lease,
-                         booted: row.state == "Booted",
-                         expired: row.lease.sessionID == nil && row.lease.expiresAt < now)
-            }
-            statusError = nil
-        } catch {
-            statusError = String(describing: error)
+        guard refreshTask == nil else {
+            refreshPending = true
+            return
         }
+
+        let statusLoader = statusLoader
+        refreshTask = Task { @MainActor [weak self] in
+            let result = await Task.detached(priority: .utility) {
+                do {
+                    return RefreshResult.success(try statusLoader())
+                } catch {
+                    return RefreshResult.failure(String(describing: error))
+                }
+            }.value
+
+            guard !Task.isCancelled, let self else { return }
+            finishRefresh(result)
+        }
+    }
+
+    nonisolated private static func loadRows() throws -> [BoardRow] {
+        let now = Date()
+        return try Allocator().status().map { row in
+            BoardRow(
+                id: row.udid,
+                lease: row.lease,
+                booted: row.state == "Booted",
+                expired: row.lease.sessionID == nil && row.lease.expiresAt < now
+            )
+        }
+    }
+
+    private func finishRefresh(_ result: RefreshResult) {
+        refreshTask = nil
+        switch result {
+        case .failure(let error):
+            statusError = error
+        case .success(let rows):
+            self.rows = rows
+            statusError = nil
+        }
+
+        guard refreshPending else { return }
+        refreshPending = false
+        refresh()
     }
 
     private func watchRegistry() {
