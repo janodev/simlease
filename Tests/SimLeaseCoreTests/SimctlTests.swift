@@ -67,6 +67,27 @@ final class SimctlTests: XCTestCase {
         XCTAssertEqual(result?.id, "dt-17")
     }
 
+    func testPreferredDeviceTypeDoesNotFallbackForAnExactRequest() throws {
+        let json = """
+        {"devicetypes": [
+            {"name": "iPhone 17 Pro", "identifier": "dt-17"}
+        ]}
+        """
+        let runner = FakeRunner()
+        runner.setResponse("xcrun simctl list -j devicetypes",
+                           ProcessResult(status: 0, stdout: json, stderr: ""))
+
+        let result = try Simctl(runner: runner).preferredDeviceType(
+            from: ["iPhone SE"],
+            allowFallback: false)
+        let exact = try Simctl(runner: runner).preferredDeviceType(
+            from: ["iPhone 17 Pro"],
+            allowFallback: false)
+
+        XCTAssertNil(result)
+        XCTAssertEqual(exact?.id, "dt-17")
+    }
+
     func testListRejectsNonzeroExitStatus() {
         let runner = FakeRunner()
         runner.setResponse(

@@ -23,15 +23,48 @@ public struct ShellRunner: ProcessRunner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
+        let standardOutput = Pipe()
+        let standardError = Pipe()
+        process.standardOutput = standardOutput
+        process.standardError = standardError
         try process.run()
-        let stdout = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let stderr = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let output = ProcessOutput()
+        let readers = DispatchGroup()
+        readers.enter()
+        DispatchQueue.global(qos: .utility).async {
+            output.setStandardOutput(standardOutput.fileHandleForReading.readDataToEndOfFile())
+            readers.leave()
+        }
+        readers.enter()
+        DispatchQueue.global(qos: .utility).async {
+            output.setStandardError(standardError.fileHandleForReading.readDataToEndOfFile())
+            readers.leave()
+        }
         process.waitUntilExit()
-        return ProcessResult(status: process.terminationStatus, stdout: stdout, stderr: stderr)
+        readers.wait()
+        let snapshot = output.snapshot()
+        return ProcessResult(
+            status: process.terminationStatus,
+            stdout: String(data: snapshot.standardOutput, encoding: .utf8) ?? "",
+            stderr: String(data: snapshot.standardError, encoding: .utf8) ?? "")
+    }
+}
+
+private final class ProcessOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var standardError = Data()
+    private var standardOutput = Data()
+
+    func setStandardError(_ data: Data) {
+        lock.withLock { standardError = data }
+    }
+
+    func setStandardOutput(_ data: Data) {
+        lock.withLock { standardOutput = data }
+    }
+
+    func snapshot() -> (standardOutput: Data, standardError: Data) {
+        lock.withLock { (standardOutput, standardError) }
     }
 }
 
@@ -206,7 +239,10 @@ public struct Simctl {
         }
     }
 
-    public func preferredDeviceType(from preferred: [String]) throws -> (name: String, id: String)? {
+    public func preferredDeviceType(
+        from preferred: [String],
+        allowFallback: Bool = true
+    ) throws -> (name: String, id: String)? {
         let list: [[String: Any]] = try listValue("devicetypes", key: "devicetypes")
         var byName: [String: String] = [:]
         for deviceType in list {
@@ -217,6 +253,7 @@ public struct Simctl {
         for name in preferred {
             if let id = byName[name] { return (name, id) }
         }
+        guard allowFallback else { return nil }
         for deviceType in list {
             if let name = deviceType["name"] as? String, name.contains("iPhone"),
                let id = deviceType["identifier"] as? String {

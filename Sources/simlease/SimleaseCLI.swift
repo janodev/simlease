@@ -96,6 +96,7 @@ struct Run: ParsableCommand {
 
         var commandError: Error?
         var commandStatus: Int32 = 0
+        var cleanupError: Error?
         do {
             try session.transition(to: .booting)
             try Simctl().bootAndWait(session.udid)
@@ -110,11 +111,12 @@ struct Run: ParsableCommand {
             stderrPrint("🧹 Deleted private \(session.deviceName) (\(session.udid.prefix(8)))")
         } catch {
             stderrPrint("⚠️ \(error)")
-            if commandError == nil { commandError = error }
+            cleanupError = error
         }
 
         if let commandError { throw commandError }
         if commandStatus != 0 { throw ExitCode(commandStatus) }
+        if let cleanupError { throw cleanupError }
     }
 
     private func runCommand(_ arguments: [String], session: SimulatorSession) throws -> Int32 {

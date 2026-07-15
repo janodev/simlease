@@ -12,7 +12,7 @@ final class RegistryTests: XCTestCase {
 
     func testLoadMissingFileReturnsEmptyRegistry() throws {
         let reg = try RegistryStore.load(at: dir.appendingPathComponent("registry.json"))
-        XCTAssertEqual(reg.schema, 1)
+        XCTAssertEqual(reg.schema, Registry.currentSchema)
         XCTAssertTrue(reg.leases.isEmpty)
     }
 
@@ -38,6 +38,50 @@ final class RegistryTests: XCTestCase {
         let text = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(text.contains("original_name"))
         XCTAssertTrue(text.contains("expires_at"))
+        XCTAssertTrue(text.contains(#""schema" : 2"#))
+    }
+
+    func testSchemaOneRegistryMigratesAndSavesAsSchemaTwo() throws {
+        let url = dir.appendingPathComponent("registry.json")
+        let legacyRegistry = """
+        {
+          "schema": 1,
+          "leases": {
+            "LEGACY-UDID": {
+              "agent": "legacy-agent",
+              "claimed_at": "2001-01-01T00:00:00Z",
+              "created": false,
+              "expires_at": "2001-01-01T02:00:00Z",
+              "label": "legacy lease",
+              "original_name": "iPhone 17 Pro",
+              "renamed": true,
+              "workdir": "/tmp/legacy"
+            }
+          }
+        }
+        """
+        try legacyRegistry.write(to: url, atomically: true, encoding: .utf8)
+
+        let migrated = try RegistryStore.load(at: url)
+
+        XCTAssertEqual(migrated.schema, Registry.currentSchema)
+        let lease = try XCTUnwrap(migrated.leases["LEGACY-UDID"])
+        XCTAssertEqual(lease.agent, "legacy-agent")
+        XCTAssertNil(lease.sessionID)
+        XCTAssertNil(lease.sessionState)
+        try RegistryStore.save(migrated, to: url)
+        let savedText = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(savedText.contains(#""schema" : 2"#))
+        XCTAssertEqual(try RegistryStore.load(at: url), migrated)
+    }
+
+    func testSaveAlwaysWritesCurrentSchema() throws {
+        let url = dir.appendingPathComponent("registry.json")
+        try RegistryStore.save(Registry(schema: 1, leases: [:]), to: url)
+
+        let stored = try RegistryStore.load(at: url)
+
+        XCTAssertEqual(stored.schema, Registry.currentSchema)
     }
 
     func testCorruptFileIsBackedUpAndFailsClosed() throws {
@@ -58,6 +102,12 @@ final class RegistryTests: XCTestCase {
     func testUnsupportedSchemaThrows() throws {
         let url = dir.appendingPathComponent("registry.json")
         try #"{"schema": 99, "leases": {}}"#.write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try RegistryStore.load(at: url))
+    }
+
+    func testSchemaZeroThrows() throws {
+        let url = dir.appendingPathComponent("registry.json")
+        try #"{"schema": 0, "leases": {}}"#.write(to: url, atomically: true, encoding: .utf8)
         XCTAssertThrowsError(try RegistryStore.load(at: url))
     }
 }

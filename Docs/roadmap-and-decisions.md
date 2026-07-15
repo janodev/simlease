@@ -55,12 +55,14 @@ released automatically when the descriptor or supervisor exits.
 
 ## 2026-07-15 - Keep the global lock short
 
-**Partially implemented.** Boot and child work run outside the global lock, but
-final shutdown and deletion currently hold it alongside the per-UDID lock.
+**Partially implemented.** Foreground boot, child work, final shutdown, and final
+deletion run outside the global lock. Legacy cleanup and abandoned-session
+reconciliation still perform Simulator commands while holding it.
 
 Reason: independent sessions should proceed concurrently on different devices.
-Narrowing the final cleanup transaction remains a performance and availability
-improvement, not an ownership-correctness blocker.
+A focused test verifies that cleanup can acquire an independent registry-lock
+probe while foreground final shutdown runs. Reconciliation needs a separate
+per-UDID cleanup transaction before the global-lock rule is complete.
 
 ## 2026-07-15 - Never unlink kernel lock files
 
@@ -79,10 +81,25 @@ or state-contaminated use.
 
 ## 2026-07-15 - Registry corruption fails closed
 
-**Implemented.** Existing undecodable data is retained, copied for diagnosis,
-and blocks lifecycle mutation.
+**Implemented.** Existing unreadable paths and undecodable data block lifecycle
+mutation. Corrupt bytes are retained and copied for diagnosis.
 
 Reason: losing the ownership view must not make recorded devices appear free.
+
+## 2026-07-15 - Schema 2 fences session ownership from v1
+
+**Implemented.** Schema-1 registries load and migrate on the next save. Every
+new write uses schema 2, which v1 readers reject. The fence takes v1's
+directory-compatible barrier only for the migration write; normal v2 work uses
+a separate persistent `registry.lock` flock that v1 cannot unlink.
+
+Reason: v1 does not decode session lifecycle fields or probe per-UDID locks. It
+must fail closed before it can treat a live foreground session as an expired
+cooperative lease.
+
+The migration barrier deliberately does not copy v1's age-based lock stealing.
+A held directory causes a timeout and fail-closed recovery because an old but
+live v1 transaction may still save a schema-1 snapshot.
 
 ## 2026-07-15 - Catchable signals are forwarded without escalation
 
@@ -107,8 +124,8 @@ cooperative and never inherit `run` guarantees.
 4. Add per-UDID cancellation, forced recovery, and cleanup history beyond the
    menubar app's current error display and global-GC retry.
 5. Decide a grace deadline and escalation sequence for signal-ignoring children.
-6. Stop holding the global registry lock across final Simulator shutdown and
-   deletion while retaining durable cleanup state.
+6. Move legacy and abandoned-session reconciliation commands outside the global
+   registry lock while preserving delete-only ownership.
 
 # Future Decisions
 

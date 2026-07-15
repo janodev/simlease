@@ -52,37 +52,40 @@ public final class SimulatorSession {
     public func finish() throws {
         guard !finished else { return }
 
-        let registryLock = FileLock(path: paths.lock)
-        try registryLock.acquire()
-        defer { registryLock.release() }
-
-        var registry = try RegistryStore.load(at: paths.registry)
-        if let lease = registry.leases[udid], lease.sessionID != id {
-            throw SimulatorSessionError.ownershipLost(udid)
-        }
-
-        if var lease = registry.leases[udid] {
+        try mutateRegistry { registry in
+            guard var lease = registry.leases[udid] else { return false }
+            guard lease.sessionID == id else {
+                throw SimulatorSessionError.ownershipLost(udid)
+            }
             lease.sessionFailure = nil
             lease.sessionState = .cleaning
             registry.leases[udid] = lease
-            try RegistryStore.save(registry, to: paths.registry)
+            return true
         }
 
         do {
             try simctl.shutdownChecked(udid)
             try simctl.deleteChecked(udid)
         } catch {
-            if var lease = registry.leases[udid] {
+            try? mutateRegistry { registry in
+                guard var lease = registry.leases[udid], lease.sessionID == id else {
+                    return false
+                }
                 lease.sessionFailure = String(describing: error)
                 lease.sessionState = .quarantined
                 registry.leases[udid] = lease
-                try? RegistryStore.save(registry, to: paths.registry)
+                return true
             }
             throw error
         }
 
-        if registry.leases.removeValue(forKey: udid) != nil {
-            try RegistryStore.save(registry, to: paths.registry)
+        try mutateRegistry { registry in
+            guard let lease = registry.leases[udid] else { return false }
+            guard lease.sessionID == id else {
+                throw SimulatorSessionError.ownershipLost(udid)
+            }
+            registry.leases.removeValue(forKey: udid)
+            return true
         }
         finished = true
         deviceLock.release()
@@ -91,22 +94,29 @@ public final class SimulatorSession {
     public func transition(to state: SessionState) throws {
         guard !finished else { return }
 
-        let registryLock = FileLock(path: paths.lock)
-        try registryLock.acquire()
-        defer { registryLock.release() }
-
-        var registry = try RegistryStore.load(at: paths.registry)
-        guard var lease = registry.leases[udid], lease.sessionID == id else {
-            throw SimulatorSessionError.ownershipLost(udid)
+        try RegistryTransaction.withLock(paths: paths) {
+            var registry = try RegistryStore.load(at: paths.registry)
+            guard var lease = registry.leases[udid], lease.sessionID == id else {
+                throw SimulatorSessionError.ownershipLost(udid)
+            }
+            lease.sessionFailure = nil
+            lease.sessionState = state
+            registry.leases[udid] = lease
+            try RegistryStore.save(registry, to: paths.registry)
         }
-        lease.sessionFailure = nil
-        lease.sessionState = state
-        registry.leases[udid] = lease
-        try RegistryStore.save(registry, to: paths.registry)
     }
 
     deinit {
         deviceLock.release()
+    }
+
+    private func mutateRegistry(_ mutation: (inout Registry) throws -> Bool) throws {
+        try RegistryTransaction.withLock(paths: paths) {
+            var registry = try RegistryStore.load(at: paths.registry)
+            if try mutation(&registry) {
+                try RegistryStore.save(registry, to: paths.registry)
+            }
+        }
     }
 }
 
@@ -128,66 +138,66 @@ public struct SessionManager {
     /// Creates a private simulator and keeps its per-device lock for the
     /// returned session's entire lifetime. Sessions never reuse pooled devices.
     public func start(_ request: SessionRequest) throws -> SimulatorSession {
-        let registryLock = FileLock(path: paths.lock)
-        try registryLock.acquire()
-        defer { registryLock.release() }
+        try RegistryTransaction.withLock(paths: paths) {
+            var registry = try RegistryStore.load(at: paths.registry)
+            let allocator = Allocator(
+                simctl: simctl,
+                paths: paths,
+                preferred: preferred,
+                now: now)
+            let present = try simctl.devices(availableOnly: false)
+            let registryBeforeReap = registry
+            _ = allocator.reap(&registry, present: present)
+            if registry != registryBeforeReap {
+                try RegistryStore.save(registry, to: paths.registry)
+            }
 
-        var registry = try RegistryStore.load(at: paths.registry)
-        let allocator = Allocator(
-            simctl: simctl,
-            paths: paths,
-            preferred: preferred,
-            now: now)
-        let present = try simctl.devices(availableOnly: false)
-        let registryBeforeReap = registry
-        _ = allocator.reap(&registry, present: present)
-        if registry != registryBeforeReap {
-            try RegistryStore.save(registry, to: paths.registry)
+            let requestedNames = request.deviceName.map { [$0] } ?? preferred
+            guard let deviceType = try simctl.preferredDeviceType(
+                from: requestedNames,
+                allowFallback: request.deviceName == nil),
+                  let runtimeID = try simctl.latestIOSRuntime() else {
+                throw AllocatorError.noDeviceAvailable("no matching device type or iOS runtime found")
+            }
+
+            let id = UUID().uuidString
+            let shortID = String(id.prefix(8))
+            let displayLabel = "\(request.label) [\(shortID)]"
+            let displayName = Allocator.lockedName(label: displayLabel, original: deviceType.name)
+            let udid = try simctl.create(
+                name: displayName,
+                deviceTypeID: deviceType.id,
+                runtimeID: runtimeID)
+            let deviceLock = FileLock(path: paths.deviceLock(for: udid))
+
+            do {
+                try deviceLock.acquire(timeout: 0)
+                registry.leases[udid] = Lease(
+                    label: request.label,
+                    agent: request.agent,
+                    workdir: request.workdir,
+                    originalName: deviceType.name,
+                    renamed: true,
+                    created: true,
+                    sessionID: id,
+                    sessionState: .created,
+                    claimedAt: now(),
+                    expiresAt: now().addingTimeInterval(7200))
+                try RegistryStore.save(registry, to: paths.registry)
+            } catch {
+                deviceLock.release()
+                try? simctl.shutdownChecked(udid)
+                try? simctl.deleteChecked(udid)
+                throw error
+            }
+
+            return SimulatorSession(
+                id: id,
+                udid: udid,
+                deviceName: deviceType.name,
+                deviceLock: deviceLock,
+                paths: paths,
+                simctl: simctl)
         }
-
-        let requestedNames = request.deviceName.map { [$0] } ?? preferred
-        guard let deviceType = try simctl.preferredDeviceType(from: requestedNames),
-              let runtimeID = try simctl.latestIOSRuntime() else {
-            throw AllocatorError.noDeviceAvailable("no matching device type or iOS runtime found")
-        }
-
-        let id = UUID().uuidString
-        let shortID = String(id.prefix(8))
-        let displayLabel = "\(request.label) [\(shortID)]"
-        let displayName = Allocator.lockedName(label: displayLabel, original: deviceType.name)
-        let udid = try simctl.create(
-            name: displayName,
-            deviceTypeID: deviceType.id,
-            runtimeID: runtimeID)
-        let deviceLock = FileLock(path: paths.deviceLock(for: udid))
-
-        do {
-            try deviceLock.acquire(timeout: 0)
-            registry.leases[udid] = Lease(
-                label: request.label,
-                agent: request.agent,
-                workdir: request.workdir,
-                originalName: deviceType.name,
-                renamed: true,
-                created: true,
-                sessionID: id,
-                sessionState: .created,
-                claimedAt: now(),
-                expiresAt: now().addingTimeInterval(7200))
-            try RegistryStore.save(registry, to: paths.registry)
-        } catch {
-            deviceLock.release()
-            try? simctl.shutdownChecked(udid)
-            try? simctl.deleteChecked(udid)
-            throw error
-        }
-
-        return SimulatorSession(
-            id: id,
-            udid: udid,
-            deviceName: deviceType.name,
-            deviceLock: deviceLock,
-            paths: paths,
-            simctl: simctl)
     }
 }

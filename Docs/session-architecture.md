@@ -50,9 +50,9 @@ session is abandoned and delete-only; it is never a reusable simulator.
    block on `bootstatus <UDID> -b` while retaining the UDID lock.
 4. **Run** - Persist `running` and start the child with the session environment
    and inherited streams.
-5. **Clean** - Reacquire the global registry lock, persist `cleaning`, perform
-   checked shutdown and deletion while both locks are held, then remove the
-   registry record and release the global lock.
+5. **Clean** - Briefly reacquire the global registry lock to persist `cleaning`,
+   release it, and perform checked shutdown and deletion while the UDID lock
+   remains held. Reacquire the global lock to remove the registry record.
 6. **Unlock** - Release the UDID lock only after successful cleanup. On cleanup
    failure, persist `quarantined`, report the error, and retain ownership until
    the supervisor ends.
@@ -73,7 +73,8 @@ The registry has no completed row: successful deletion removes the record.
 | S8 | GC does not reclaim a lock-held session regardless of TTL or worktree state. |
 | S9 | A lockless registered session may only be deleted, never adopted. |
 | S10 | After creation, all Simulator lifecycle operations use the explicit session UDID; names are presentation hints. |
-| S11 | Existing corrupt or unsupported registry data blocks mutation instead of becoming an empty ownership view. |
+| S11 | Existing unreadable, corrupt, or unsupported registry data blocks mutation instead of becoming an empty ownership view. |
+| S12 | Schema 1 migrates to schema 2 under a brief v1-compatible directory barrier that v2 never steals by age; v2 flock ownership stays on a distinct inode and v1 readers reject schema 2. |
 
 # Kernel Locks
 
@@ -88,10 +89,12 @@ same path. Close-on-exec prevents the child from inheriting the supervisor's
 ownership descriptor.
 
 The global lock covers registry transitions, reconciliation, device resolution,
-creation, and initial publication. It is released before boot and child work so
-independent sessions can proceed on separate per-device locks. Final cleanup
-currently reacquires it across shutdown and deletion, serializing that boundary
-with allocation and other cleanup.
+creation, and initial publication. Foreground-session final cleanup releases it
+before boot, child work, shutdown, and deletion so independent sessions can
+proceed on separate per-device locks. That cleanup uses short global-lock
+transactions before and after the checked Simulator commands; a focused test
+probes the lock during shutdown. Legacy cleanup and abandoned-session
+reconciliation still perform their Simulator commands under the global lock.
 
 # Process and Exit Semantics
 
@@ -106,23 +109,35 @@ There is currently no grace deadline or forced escalation for a child that
 ignores a forwarded signal.
 
 If setup and cleanup both fail, diagnostics retain the setup error and also emit
-the cleanup warning. If a child exits nonzero and cleanup then fails, cleanup is
-an infrastructure failure and may determine the reported command failure. Code
-must continue to test both diagnostics and final state when changing precedence.
+the cleanup warning. If a child exits nonzero and cleanup then fails, the child
+status remains the process result while the cleanup warning and quarantined
+registry state preserve the infrastructure failure. Tests cover this precedence.
 
 # Recovery Semantics
 
 | Failure | Implemented response |
 |---|---|
 | Setup fails before child launch | Skip the child and attempt checked cleanup while the lock remains held. |
-| Child exits nonzero | Attempt cleanup and preserve the child status when cleanup succeeds. |
+| Child exits nonzero | Attempt cleanup and preserve the child status; report any cleanup failure separately and retain quarantine state. |
 | Catchable termination | Forward to the child, wait, clean, and return the signal-derived status. |
 | Supervisor crash or `SIGKILL` after publication | Kernel ownership drops; the direct child may survive; the registry row remains and the next mutating reconciliation deletes the simulator. |
-| Existing registry bytes cannot decode, or use a newer schema | Retain the original and fail closed for lifecycle mutation. |
+| Existing registry path is unreadable, cannot decode, or uses an unsupported schema | Retain corrupt bytes where applicable and fail closed for lifecycle mutation. |
 | Cleanup fails | Persist `quarantined` plus failure detail; keep the simulator delete-only. |
 | TTL expires during a live session | Ignore expiry while its UDID lock is held. |
 
 # Compatibility Boundary
+
+Registry schema 2 fences the foreground-session fields from schema-1 binaries.
+The new reader accepts schema 1 and every save writes schema 2. Before the first
+v2 mutation, a short migration takes v1's removable-directory barrier at
+`~/.simlease/lock`, rereads, and writes the fence. Normal v2 transactions remain
+on the distinct persistent `~/.simlease/registry.lock` inode, which a v1 stale
+lock cannot unlink. A v1 reader then rejects schema 2. Replace the CLI and menu
+app together to avoid repeated compatibility errors.
+
+If the legacy directory does not disappear before the migration deadline, v2
+fails closed without unlinking it or changing schema 1. This distinguishes an
+unknown live v1 transaction from a path that is merely old.
 
 `claim`, `renew`, and `release` remain cooperative legacy commands. They do not
 inherit foreground-session guarantees. Legacy allocation must still exclude
@@ -143,8 +158,8 @@ The following remain future work:
 * a broker or Unix-domain-socket service for reconnectable sessions across
   unrelated invocations;
 * bounded signal grace periods and explicit escalation policy;
-* a narrower final-cleanup registry transaction that preserves recovery state
-  without holding the global lock across Simulator commands;
+* reconciliation that retains safe per-UDID authority without holding the global
+  lock across legacy or abandoned-session Simulator cleanup;
 * per-UDID cancel, forced recovery, and cleanup history beyond the menubar app's
   current error presentation and global-GC retry; and
 * stronger recovery testing around persistence failures and real Simulator

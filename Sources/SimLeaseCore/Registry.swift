@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum SessionState: String, Codable, Equatable {
@@ -54,22 +55,27 @@ public struct Lease: Codable, Equatable {
 }
 
 public struct Registry: Codable, Equatable {
+    public static let currentSchema = 2
+
     public var schema: Int
     public var leases: [String: Lease]
 
-    public static let empty = Registry(schema: 1, leases: [:])
+    public static let empty = Registry(schema: currentSchema, leases: [:])
 }
 
 public enum RegistryError: Error, CustomStringConvertible {
     case corrupt(String)
+    case unreadable(String, String)
     case unsupportedSchema(Int)
 
     public var description: String {
         switch self {
         case .corrupt(let path):
             return "registry at \(path) is corrupt; original retained and allocation blocked"
+        case .unreadable(let path, let detail):
+            return "registry at \(path) is unreadable; allocation blocked: \(detail)"
         case .unsupportedSchema(let version):
-            return "registry schema \(version) is newer than this simlease understands — upgrade simlease"
+            return "registry schema \(version) is unsupported by this version of simlease"
         }
     }
 }
@@ -91,10 +97,45 @@ public enum RegistryStore {
     }
 
     public static func load(at url: URL) throws -> Registry {
-        guard let data = try? Data(contentsOf: url) else { return .empty }
+        guard var registry = try loadStored(at: url) else { return .empty }
+        registry.schema = Registry.currentSchema
+        return registry
+    }
+
+    static func migrateIfNeeded(
+        at url: URL,
+        legacyLock legacyLockURL: URL,
+        timeout: TimeInterval = 20
+    ) throws {
+        if try loadStored(at: url)?.schema == Registry.currentSchema {
+            return
+        }
+
+        let legacyLock = LegacyMigrationLock(path: legacyLockURL)
+        try legacyLock.acquire(timeout: timeout)
+        defer { legacyLock.release() }
+
+        let storedRegistry = try loadStored(at: url)
+        guard storedRegistry?.schema != Registry.currentSchema else { return }
+        var registry = storedRegistry ?? .empty
+        registry.schema = Registry.currentSchema
+        try legacyLock.refreshTimestamp()
+        try save(registry, to: url)
+    }
+
+    private static func loadStored(at url: URL) throws -> Registry? {
+        guard try pathExists(at: url) else { return nil }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            throw RegistryError.unreadable(url.path, error.localizedDescription)
+        }
         do {
             let registry = try decoder.decode(Registry.self, from: data)
-            guard registry.schema <= 1 else { throw RegistryError.unsupportedSchema(registry.schema) }
+            guard (1 ... Registry.currentSchema).contains(registry.schema) else {
+                throw RegistryError.unsupportedSchema(registry.schema)
+            }
             return registry
         } catch let error as RegistryError {
             throw error
@@ -111,10 +152,26 @@ public enum RegistryStore {
     public static func save(_ registry: Registry, to url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let data = try encoder.encode(registry)
+        var currentRegistry = registry
+        currentRegistry.schema = Registry.currentSchema
+        let data = try encoder.encode(currentRegistry)
         let tmp = url.deletingLastPathComponent()
             .appendingPathComponent(url.lastPathComponent + ".tmp")
         try data.write(to: tmp, options: .atomic)
         _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+    }
+
+    private static func pathExists(at url: URL) throws -> Bool {
+        var information = stat()
+        var failure = EINVAL
+        let result: Int32 = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            let result = lstat(path, &information)
+            if result != 0 { failure = errno }
+            return result
+        }
+        if result == 0 { return true }
+        if failure == ENOENT { return false }
+        throw RegistryError.unreadable(url.path, String(cString: strerror(failure)))
     }
 }

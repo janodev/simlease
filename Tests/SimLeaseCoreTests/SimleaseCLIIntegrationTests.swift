@@ -50,7 +50,8 @@ struct SimleaseCLIIntegrationTests {
             try? FileManager.default.removeItem(at: directory)
         }
 
-        func run(childExit: Int32 = 0, bootstatusExit: Int32 = 0) throws -> CommandResult {
+        func run(childExit: Int32 = 0, bootstatusExit: Int32 = 0,
+                 deleteExit: Int32 = 0) throws -> CommandResult {
             let child = directory.appendingPathComponent("child")
             try writeExecutable(Self.childScript, to: child)
 
@@ -64,6 +65,7 @@ struct SimleaseCLIIntegrationTests {
             environment["SIMLEASE_CHILD_EXIT"] = "\(childExit)"
             environment["SIMLEASE_CHILD_LOG"] = childLog.path
             environment["SIMLEASE_FAKE_BOOTSTATUS_EXIT"] = "\(bootstatusExit)"
+            environment["SIMLEASE_FAKE_DELETE_EXIT"] = "\(deleteExit)"
             environment["SIMLEASE_FAKE_LOG"] = fakeLog.path
             environment["SIMLEASE_HOME"] = stateDirectory.path
             process.environment = environment
@@ -171,7 +173,7 @@ struct SimleaseCLIIntegrationTests {
           boot) ;;
           bootstatus) exit "${SIMLEASE_FAKE_BOOTSTATUS_EXIT:-0}" ;;
           shutdown) ;;
-          delete) ;;
+          delete) exit "${SIMLEASE_FAKE_DELETE_EXIT:-0}" ;;
           *) exit 64 ;;
         esac
         """
@@ -223,6 +225,18 @@ struct SimleaseCLIIntegrationTests {
         #expect(calls.contains("simctl delete FAKE-SESSION-UDID"))
         #expect(try RegistryStore.load(
             at: fixture.stateDirectory.appendingPathComponent("registry.json")).leases.isEmpty)
+    }
+
+    @Test
+    func childFailureStillWinsWhenCleanupAlsoFails() throws {
+        let fixture = try Fixture()
+        let result = try fixture.run(childExit: 42, deleteExit: 72)
+
+        #expect(result.status == 42)
+        #expect(result.stderr.contains("Cleanup") || result.stderr.contains("delete"))
+        let registry = try RegistryStore.load(
+            at: fixture.stateDirectory.appendingPathComponent("registry.json"))
+        #expect(registry.leases["FAKE-SESSION-UDID"]?.sessionState == .quarantined)
     }
 
     @Test

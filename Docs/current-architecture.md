@@ -28,8 +28,10 @@ install, launch, test, inspection, and screenshot workflow.
 | `simlease` CLI | Starts supervised sessions, manages legacy leases, reports status, runs GC, and focuses Simulator windows. |
 | `SessionManager` and `SimulatorSession` | Create a private simulator, retain its per-UDID lock, persist lifecycle state, and perform checked cleanup. |
 | `Allocator` | Serializes registry mutations, manages legacy claims, excludes session devices, and reconciles registered abandoned sessions delete-only. |
+| `RegistryTransaction` | Holds the v2 global kernel lock and performs the one-time schema fence through the v1-compatible migration barrier. |
 | `FileLock` | Holds Darwin `flock` locks on persistent regular files with monotonic acquisition deadlines and close-on-exec descriptors. |
-| `RegistryStore` | Persists schema-1 JSON and fails closed when existing data is corrupt or from a newer schema. |
+| `LegacyMigrationLock` | Briefly uses v1's removable-directory protocol only while fencing schema 1 to schema 2. |
+| `RegistryStore` | Persists schema-2 JSON, migrates schema 1, and fails closed when an existing path is unreadable, corrupt, or uses an unsupported schema. |
 | `Simctl` | Validates discovery output and exposes checked create, boot-readiness, shutdown, and deletion operations. |
 | `SimLease.app` | Uses Observation for a titled menu-only board, displays leases plus status/cleanup errors, focuses windows, retries cleanup, and tears down its timers and watcher with the model lifecycle. |
 
@@ -41,7 +43,8 @@ The implementation lives in [`Sources/SimLeaseCore`](../Sources/SimLeaseCore/),
 
 `simlease run [options] -- <command...>` performs this sequence:
 
-1. Acquire the global `registry.lock`, load the registry, and reconcile eligible
+1. Acquire the global `registry.lock`, fence schema 1 when needed, load the
+   registry, and reconcile eligible
    registered abandoned sessions.
 2. Resolve the requested device type and newest available iOS runtime, then
    create a uniquely named disposable simulator.
@@ -50,9 +53,9 @@ The implementation lives in [`Sources/SimLeaseCore`](../Sources/SimLeaseCore/),
    blocking `bootstatus -b`, then transition to `running`.
 5. Start the child with inherited standard streams and export
    `SIMULATOR_ID`, `SIMULATOR_UDID`, and `SIMLEASE_SESSION_ID`.
-6. After the child exits, reacquire the global lock, transition to `cleaning`,
-   perform checked shutdown and deletion, remove the registry record, release
-   the global lock, and release the per-UDID lock last.
+6. After the child exits, briefly reacquire the global lock to persist
+   `cleaning`, release it for checked shutdown and deletion, then reacquire it to
+   remove the registry record. Release the per-UDID lock last.
 
 Each invocation receives a new session ID and simulator, including concurrent
 or sequential runs from the same Git worktree. Names are presentation hints;
@@ -65,7 +68,7 @@ worktree existence, process metadata, the registry record, and the simulator nam
 cannot revoke it. Allocation probes lock files without waiting and treats any
 probe error as owned, so an inaccessible lock fails closed.
 
-The global kernel lock at `~/.simlease/registry.lock` serializes registry and
+The v2 global kernel lock at `~/.simlease/registry.lock` serializes registry and
 allocation transitions. Per-device locks live under
 `~/.simlease/device-locks/`. Lock files are mode `0600`, remain on disk, and are
 never unlinked. Ownership ends when the descriptor closes, including on process
@@ -74,19 +77,35 @@ death.
 The registry is observability and recovery state, not proof that a device is
 free. Session records include an ID, lifecycle state, and optional failure. A
 corrupt registry is retained in place, copied to `.corrupt`, and causes mutation
-to fail instead of being replaced with an empty registry.
+to fail instead of being replaced with an empty registry. An existing path that
+cannot be read also fails closed; only a genuinely absent path means an empty
+registry.
+
+Schema 2 is an ownership compatibility fence. New code accepts schema 1 and
+writes schema 2 before the next mutation. That one short write acquires v1's
+removable-directory barrier at `~/.simlease/lock` while v2's permanent kernel
+lock remains on the distinct `registry.lock` inode. Once schema 2 is written,
+v1 readers reject it rather than deleting sessions whose new lifecycle fields
+they do not understand. Upgrade the CLI and menu app together so the old app
+does not remain in an unsupported-schema retry state.
+
+V2 never applies v1's age-based stealing rule to the migration barrier. If the
+directory remains held, migration times out and fails closed. Removing a
+leftover legacy directory is a manual recovery action only after proving no v1
+process is still using it.
 
 # Failure and Recovery
 
 | Event | Implemented behavior |
 |---|---|
-| Child exits nonzero | Cleanup still runs; the child status is preserved when cleanup succeeds. |
+| Child exits nonzero | Cleanup still runs and the child status is preserved. A concurrent cleanup failure is reported separately and retains quarantine state. |
 | Boot or readiness fails | The child is not started; checked cleanup still runs. |
 | Supervisor receives `SIGINT` or `SIGTERM` | The signal is forwarded to the child; after the child exits, cleanup runs and the conventional `128 + signal` status is returned. |
 | Supervisor receives `SIGKILL` or crashes | The kernel releases its lock. The direct child may survive because an uncatchable death cannot forward a signal. The registered session remains abandoned and delete-only; the next successful `gc`, `claim`, or session start attempts cleanup. |
 | TTL expires while the session lock is held | GC leaves the session untouched. |
 | Shutdown or deletion fails | The record remains in `quarantined` state with failure detail and is never reused. Later GC may retry delete-only cleanup. |
-| Registry cannot decode | Mutating operations fail closed; the original file remains available for diagnosis. |
+| Registry is unreadable or cannot decode | Mutating operations fail closed; corrupt bytes remain available for diagnosis. |
+| Legacy migration barrier remains held or has an incompatible file type | Schema 1 remains unchanged and mutation fails closed; v2 never removes the path by age. |
 
 Recovery never adopts an abandoned session simulator into a later session or
 legacy claim. Legacy allocation also excludes every `🔒`-prefixed simulator and
@@ -117,8 +136,9 @@ supervisor, but it is lower safety:
   reconnect, or multi-invocation ownership protocol.
 * Catchable signals are forwarded without a timeout or escalation. If the child
   ignores the signal, the supervisor keeps waiting and retains ownership.
-* Final shutdown and deletion currently run while the global registry lock is
-  held. This is safe but temporarily blocks unrelated allocation and cleanup.
+* Foreground final cleanup releases the global lock around shutdown and
+  deletion. Legacy cleanup and abandoned-session reconciliation still run under
+  the global lock, so a slow Simulator command can delay unrelated transitions.
 * The menubar app shows session state and errors and offers retry cleanup through
   global GC. It has no per-UDID cancellation, forced recovery, or cleanup
   history, so recovery control remains deliberately limited.

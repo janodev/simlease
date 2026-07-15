@@ -105,6 +105,25 @@ struct SimulatorSessionTests {
     }
 
     @Test
+    func exactDeviceRequestNeverFallsBackToAnotherIPhone() throws {
+        let fixture = try Fixture()
+        var request = fixture.request()
+        request.deviceName = "iPhone SE"
+
+        do {
+            _ = try fixture.manager().start(request)
+            Issue.record("Expected an unavailable exact device type to fail")
+        } catch let error as AllocatorError {
+            guard case .noDeviceAvailable = error else {
+                Issue.record("Unexpected allocator error: \(error)")
+                return
+            }
+        }
+
+        #expect(!fixture.runner.calls.contains { $0.prefix(3) == ["xcrun", "simctl", "create"] })
+    }
+
+    @Test
     func activeSessionCannotExpireOrBeReleasedExternally() throws {
         let fixture = try Fixture()
         let session = try fixture.manager().start(fixture.request())
@@ -185,6 +204,28 @@ struct SimulatorSessionTests {
             ProcessResult(status: 0, stdout: "", stderr: ""))
         try session.finish()
         #expect(try RegistryStore.load(at: fixture.paths.registry).leases.isEmpty)
+    }
+
+    @Test
+    func cleanupDoesNotHoldTheGlobalRegistryLock() throws {
+        let fixture = try Fixture()
+        let session = try fixture.manager().start(fixture.request())
+        var acquiredRegistryLockDuringCleanup = false
+        fixture.runner.setRunHook { arguments in
+            guard arguments == ["xcrun", "simctl", "shutdown", session.udid] else { return }
+            let probe = FileLock(path: fixture.paths.lock)
+            do {
+                try probe.acquire(timeout: 0)
+                acquiredRegistryLockDuringCleanup = true
+                probe.release()
+            } catch {
+                acquiredRegistryLockDuringCleanup = false
+            }
+        }
+
+        try session.finish()
+
+        #expect(acquiredRegistryLockDuringCleanup)
     }
 
     @Test

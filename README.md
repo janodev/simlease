@@ -39,6 +39,12 @@ open dist/SimLease.app
 
 Requires macOS 27+ and Xcode with an available iOS Simulator runtime.
 
+When upgrading from the original schema-1 release, replace both the CLI and
+SimLease.app. The first v2 mutation migrates the registry to schema 2. The
+migration briefly speaks v1's directory-lock protocol while ordinary v2 work
+uses a separate kernel-lock path. After migration, v1 fails closed with an
+unsupported-schema error.
+
 ## Quickstart
 
 Put the entire simulator workflow beneath one supervisor. A child script or
@@ -69,7 +75,8 @@ Inside the child, SimLease exports:
 | `SIMLEASE_SESSION_ID` | The unique lifecycle/session identifier. |
 
 Exiting the command or shell triggers checked shutdown and deletion. A nonzero
-child status is preserved when cleanup succeeds.
+child status is preserved; any concurrent cleanup failure is also reported and
+retained as quarantine state.
 
 ## Using it with coding agents
 
@@ -137,16 +144,17 @@ SimLease.app is a menu-only utility that watches the shared registry:
 
 ## How it works
 
-- The CLI and app share schema-1 JSON at `~/.simlease/registry.json`. Set
-  `SIMLEASE_HOME` to isolate state in tests.
-- Mutations use a Darwin `flock` at `~/.simlease/registry.lock`. Each foreground
-  session also holds `~/.simlease/device-locks/<UDID>.lock` across boot, child
-  work, and cleanup.
+- The CLI and app share schema-2 JSON at `~/.simlease/registry.json`. Schema 1
+  loads migrate on the next save. Set `SIMLEASE_HOME` to isolate state in tests.
+- Mutations use a Darwin `flock` at `~/.simlease/registry.lock`. The first
+  schema-2 write briefly uses v1's directory barrier at `~/.simlease/lock`.
+  Each foreground session also holds
+  `~/.simlease/device-locks/<UDID>.lock` across boot, child work, and cleanup.
 - Lock files are persistent regular files. SimLease closes descriptors to
   release ownership and never steals or unlinks a lock by age.
 - Allocation-critical Simulator discovery validates process status and JSON.
-  Existing corrupt or unsupported registry data fails closed rather than
-  becoming an empty ownership view.
+  Existing unreadable, corrupt, or unsupported registry data fails closed rather
+  than becoming an empty ownership view.
 - Registered lockless sessions are abandoned and delete-only. They can be
   deleted during reconciliation but never reused.
 

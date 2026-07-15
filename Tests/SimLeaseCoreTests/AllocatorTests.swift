@@ -30,7 +30,7 @@ final class AllocatorTests: XCTestCase {
             simctl: Simctl(runner: runner),
             paths: SimLeasePaths(
                 registry: dir.appendingPathComponent("registry.json"),
-                lock: dir.appendingPathComponent("lock")),
+                lock: dir.appendingPathComponent("registry.lock")),
             now: { self.now })
     }
 
@@ -133,10 +133,10 @@ final class AllocatorTests: XCTestCase {
         XCTAssertTrue(runner.calls.contains(["xcrun", "simctl", "rename", "AAA", "iPhone 17 Pro"]))
     }
 
-    func testGcWithNothingToReapDoesNotWriteRegistry() throws {
+    func testGcWithNothingToReapWritesSchemaFence() throws {
         XCTAssertEqual(try makeAllocator().gc(), [])
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: dir.appendingPathComponent("registry.json").path))
+        let registry = try RegistryStore.load(at: dir.appendingPathComponent("registry.json"))
+        XCTAssertEqual(registry, .empty)
     }
 
     func testStatusListsLeasesWithDeviceState() throws {
@@ -173,6 +173,17 @@ final class AllocatorTests: XCTestCase {
 
         XCTAssertEqual(paths.registry, home.appendingPathComponent("registry.json"))
         XCTAssertEqual(paths.lock, home.appendingPathComponent("registry.lock"))
+        XCTAssertEqual(paths.legacyLock, home.appendingPathComponent("lock"))
         XCTAssertEqual(paths.deviceLocks, home.appendingPathComponent("device-locks"))
+    }
+
+    func testLegacyTwoArgumentPathsUseDistinctV2Lock() {
+        let registry = dir.appendingPathComponent("state/registry.json")
+        let legacyLock = dir.appendingPathComponent("state/lock")
+
+        let paths = SimLeasePaths(registry: registry, lock: legacyLock)
+
+        XCTAssertEqual(paths.legacyLock, legacyLock)
+        XCTAssertEqual(paths.lock, dir.appendingPathComponent("state/registry.lock"))
     }
 }

@@ -87,10 +87,14 @@ When changing persistence or recovery:
 2. Increment schema only when older readers cannot safely consume the data.
 3. Test old decoding, round trips, unsupported newer schemas, corruption, and
    persistence failure boundaries.
-4. Never interpret `missing` or `cannot decode` as proof that a simulator is
-   unowned.
-5. Keep live locks authoritative and lockless session records delete-only.
-6. Preserve failure details until successful cleanup removes the record.
+4. Keep the v2 `registry.lock` flock distinct from v1's removable `lock`
+   directory. Use the legacy path only for the short schema-fence transaction.
+5. Never steal the legacy migration directory by age. A timeout requires proof
+   that no v1 owner remains before manual recovery.
+6. Never interpret `unreadable` or `cannot decode` as `missing`, or as proof that
+   a simulator is unowned.
+7. Keep live locks authoritative and lockless session records delete-only.
+8. Preserve failure details until successful cleanup removes the record.
 
 The create-before-publication gap is documented, not solved: do not add a broad
 scan that deletes `🔒` simulators without durable evidence of SimLease ownership.

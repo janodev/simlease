@@ -1,15 +1,30 @@
 import Foundation
 
 public struct SimLeasePaths {
+    public let legacyLock: URL
     public let registry: URL
     public let lock: URL
     public let deviceLocks: URL
 
-    public init(registry: URL, lock: URL, deviceLocks: URL? = nil) {
+    public init(
+        registry: URL,
+        lock: URL,
+        deviceLocks: URL? = nil,
+        legacyLock: URL? = nil
+    ) {
+        let stateDirectory = registry.deletingLastPathComponent()
+        let defaultLegacyLock = stateDirectory.appendingPathComponent("lock")
+        if legacyLock == nil,
+           lock.standardizedFileURL == defaultLegacyLock.standardizedFileURL {
+            self.legacyLock = lock
+            self.lock = stateDirectory.appendingPathComponent("registry.lock")
+        } else {
+            self.legacyLock = legacyLock ?? defaultLegacyLock
+            self.lock = lock
+        }
         self.registry = registry
-        self.lock = lock
         self.deviceLocks = deviceLocks
-            ?? registry.deletingLastPathComponent().appendingPathComponent("device-locks")
+            ?? stateDirectory.appendingPathComponent("device-locks")
     }
 
     public static func `default`(
@@ -19,7 +34,8 @@ public struct SimLeasePaths {
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".simlease")
         return SimLeasePaths(registry: base.appendingPathComponent("registry.json"),
                              lock: base.appendingPathComponent("registry.lock"),
-                             deviceLocks: base.appendingPathComponent("device-locks"))
+                             deviceLocks: base.appendingPathComponent("device-locks"),
+                             legacyLock: base.appendingPathComponent("lock"))
     }
 
     public func deviceLock(for udid: String) -> URL {
@@ -98,10 +114,7 @@ public struct Allocator {
     }
 
     func withLock<T>(_ body: () throws -> T) throws -> T {
-        let lock = FileLock(path: paths.lock)
-        try lock.acquire()
-        defer { lock.release() }
-        return try body()
+        try RegistryTransaction.withLock(paths: paths, body)
     }
 
     func deviceLockIsHeld(for udid: String) -> Bool {
@@ -216,7 +229,9 @@ public struct Allocator {
                                    reused: false, created: false)
             }
 
-            guard let deviceType = try simctl.preferredDeviceType(from: order),
+            guard let deviceType = try simctl.preferredDeviceType(
+                from: order,
+                allowFallback: request.deviceName == nil),
                   let runtime = try simctl.latestIOSRuntime() else {
                 throw AllocatorError.noDeviceAvailable(
                     "no device type or iOS runtime found; active leases: \(registry.leases.count)")
