@@ -3,16 +3,27 @@ import Foundation
 public struct SimLeasePaths {
     public let registry: URL
     public let lock: URL
+    public let deviceLocks: URL
 
-    public init(registry: URL, lock: URL) {
+    public init(registry: URL, lock: URL, deviceLocks: URL? = nil) {
         self.registry = registry
         self.lock = lock
+        self.deviceLocks = deviceLocks
+            ?? registry.deletingLastPathComponent().appendingPathComponent("device-locks")
     }
 
-    public static func `default`() -> SimLeasePaths {
-        let base = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".simlease")
+    public static func `default`(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> SimLeasePaths {
+        let base = environment["SIMLEASE_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".simlease")
         return SimLeasePaths(registry: base.appendingPathComponent("registry.json"),
-                             lock: base.appendingPathComponent("lock"))
+                             lock: base.appendingPathComponent("registry.lock"),
+                             deviceLocks: base.appendingPathComponent("device-locks"))
+    }
+
+    public func deviceLock(for udid: String) -> URL {
+        deviceLocks.appendingPathComponent("\(udid).lock")
     }
 }
 
@@ -43,10 +54,16 @@ public struct ClaimResult {
 }
 
 public enum AllocatorError: Error, CustomStringConvertible {
+    case activeSession(String)
+    case cleanupFailed(String)
     case noDeviceAvailable(String)
 
     public var description: String {
         switch self {
+        case .activeSession(let udid):
+            return "simlease: simulator \(udid) belongs to a live session"
+        case .cleanupFailed(let udid):
+            return "simlease: cleanup failed for simulator \(udid); lease retained for retry"
         case .noDeviceAvailable(let detail):
             return "simlease: no simulator available — \(detail)"
         }
@@ -75,6 +92,11 @@ public struct Allocator {
         "🔒 \(label) · \(original)"
     }
 
+    public static func lockedName(for lease: Lease) -> String {
+        let label = lease.sessionID.map { "\(lease.label) [\($0.prefix(8))]" } ?? lease.label
+        return lockedName(label: label, original: lease.originalName)
+    }
+
     func withLock<T>(_ body: () throws -> T) throws -> T {
         let lock = FileLock(path: paths.lock)
         try lock.acquire()
@@ -82,26 +104,51 @@ public struct Allocator {
         return try body()
     }
 
-    func freeLease(_ udid: String, _ lease: Lease, presentUDIDs: Set<String>) {
-        guard presentUDIDs.contains(udid) else { return }
-        if lease.created {
-            simctl.shutdown(udid)
-            simctl.delete(udid)
-        } else if lease.renamed {
-            simctl.rename(udid, to: lease.originalName)
+    func deviceLockIsHeld(for udid: String) -> Bool {
+        let probe = FileLock(path: paths.deviceLock(for: udid))
+        do {
+            try probe.acquire(timeout: 0)
+            probe.release()
+            return false
+        } catch {
+            // Fail closed: an inaccessible lock must never make a device look free.
+            return true
         }
+    }
+
+    @discardableResult
+    func freeLease(_ udid: String, _ lease: Lease, presentUDIDs: Set<String>) -> Bool {
+        guard presentUDIDs.contains(udid) else { return true }
+        if lease.created {
+            _ = simctl.shutdown(udid)
+            return simctl.delete(udid)
+        } else if lease.renamed {
+            return simctl.rename(udid, to: lease.originalName)
+        }
+        return true
     }
 
     func reap(_ registry: inout Registry, present: [Device]) -> [String] {
         let presentUDIDs = Set(present.map(\.udid))
         var freed: [String] = []
         for (udid, lease) in registry.leases {
+            let activeSession = lease.sessionID != nil && deviceLockIsHeld(for: udid)
+            if activeSession { continue }
+            let abandonedSession = lease.sessionID != nil
             let expired = lease.expiresAt < now()
             let pastGrace = now().timeIntervalSince(lease.claimedAt) > Allocator.gcGrace
             let workdirGone = pastGrace && !FileManager.default.fileExists(atPath: lease.workdir)
             let vanished = !presentUDIDs.contains(udid)
-            guard expired || workdirGone || vanished else { continue }
-            freeLease(udid, lease, presentUDIDs: presentUDIDs)
+            guard abandonedSession || expired || workdirGone || vanished else { continue }
+            guard freeLease(udid, lease, presentUDIDs: presentUDIDs) else {
+                if lease.sessionID != nil {
+                    var quarantined = lease
+                    quarantined.sessionFailure = "automatic cleanup failed; inspect simctl diagnostics"
+                    quarantined.sessionState = .quarantined
+                    registry.leases[udid] = quarantined
+                }
+                continue
+            }
             registry.leases.removeValue(forKey: udid)
             freed.append(udid)
         }
@@ -112,9 +159,15 @@ public struct Allocator {
         try withLock {
             var registry = try RegistryStore.load(at: paths.registry)
             let present = try simctl.devices(availableOnly: false)
+            let registryBeforeReap = registry
             _ = reap(&registry, present: present)
+            if registry != registryBeforeReap {
+                try RegistryStore.save(registry, to: paths.registry)
+            }
 
-            if let (udid, lease) = registry.leases.first(where: { $0.value.workdir == request.workdir }) {
+            if let (udid, lease) = registry.leases.first(where: {
+                $0.value.workdir == request.workdir && $0.value.sessionID == nil
+            }) {
                 var renewed = lease
                 renewed.label = request.label
                 renewed.agent = request.agent
@@ -130,7 +183,12 @@ public struct Allocator {
             }
 
             let available = try simctl.devices(availableOnly: true)
-                .filter { $0.isAvailable && registry.leases[$0.udid] == nil }
+                .filter {
+                    $0.isAvailable
+                        && registry.leases[$0.udid] == nil
+                        && !$0.name.hasPrefix("🔒")
+                        && !deviceLockIsHeld(for: $0.udid)
+                }
             let order = request.deviceName.map { [$0] } ?? preferred
             var chosen: Device?
             for name in order {
@@ -180,11 +238,16 @@ public struct Allocator {
             let entry = registry.leases.first { entryUDID, lease in
                 if let udid { return entryUDID == udid }
                 if let label { return lease.label == label }
-                return lease.workdir == workdir
+                return lease.workdir == workdir && lease.sessionID == nil
             }
             guard let (foundUDID, lease) = entry else { return nil }
-            let present = Set(((try? simctl.devices(availableOnly: false)) ?? []).map(\.udid))
-            freeLease(foundUDID, lease, presentUDIDs: present)
+            if lease.sessionID != nil, deviceLockIsHeld(for: foundUDID) {
+                throw AllocatorError.activeSession(foundUDID)
+            }
+            let present = Set(try simctl.devices(availableOnly: false).map(\.udid))
+            guard freeLease(foundUDID, lease, presentUDIDs: present) else {
+                throw AllocatorError.cleanupFailed(foundUDID)
+            }
             registry.leases.removeValue(forKey: foundUDID)
             try RegistryStore.save(registry, to: paths.registry)
             return lease
@@ -194,7 +257,9 @@ public struct Allocator {
     public func renew(workdir: String, ttl: TimeInterval) throws -> Lease? {
         try withLock {
             var registry = try RegistryStore.load(at: paths.registry)
-            guard let (udid, lease) = registry.leases.first(where: { $0.value.workdir == workdir }) else {
+            guard let (udid, lease) = registry.leases.first(where: {
+                $0.value.workdir == workdir && $0.value.sessionID == nil
+            }) else {
                 return nil
             }
             var renewed = lease
@@ -208,8 +273,9 @@ public struct Allocator {
     public func gc() throws -> [String] {
         try withLock {
             var registry = try RegistryStore.load(at: paths.registry)
+            let original = registry
             let freed = reap(&registry, present: try simctl.devices(availableOnly: false))
-            if !freed.isEmpty { try RegistryStore.save(registry, to: paths.registry) }
+            if registry != original { try RegistryStore.save(registry, to: paths.registry) }
             return freed
         }
     }

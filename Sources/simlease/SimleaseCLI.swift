@@ -1,4 +1,5 @@
 import ArgumentParser
+import Darwin
 import Foundation
 import SimLeaseCore
 
@@ -50,9 +51,142 @@ func remaining(_ lease: Lease, now: Date = Date()) -> String {
 struct Simlease: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "simlease",
-        abstract: "Lease iOS simulators to AI agents — locks, task names and TTLs.",
-        subcommands: [Claim.self, Release.self, Renew.self, Status.self, GC.self, FocusCommand.self],
+        abstract: "Run isolated simulator sessions or manage cooperative simulator leases.",
+        subcommands: [
+            Run.self, Claim.self, Release.self, Renew.self, Status.self,
+            GarbageCollect.self, FocusCommand.self,
+        ],
         defaultSubcommand: Claim.self)
+}
+
+struct Run: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "run",
+        abstract: "Run a command with a private disposable simulator.",
+        aliases: ["with"])
+
+    @Option(help: "Task label shown in the simulator window title (default: git branch).")
+    var label: String?
+
+    @Option(help: "Agent name recorded in session metadata (default: detected from env).")
+    var agent: String?
+
+    @Option(help: "Exact device type to create, e.g. 'iPhone 17 Pro'.")
+    var device: String?
+
+    @Argument(parsing: .remaining, help: "Command and arguments to run.")
+    var command: [String] = []
+
+    func validate() throws {
+        if command.isEmpty {
+            throw ValidationError("provide a command after '--', for example: simlease run -- make test")
+        }
+    }
+
+    func run() throws {
+        let request = SessionRequest(
+            label: label ?? defaultLabel(),
+            agent: agent ?? defaultAgent(),
+            workdir: currentWorkdir(),
+            deviceName: device)
+        let session = try SessionManager().start(request)
+        stderrPrint(
+            "🔒 Created private \(session.deviceName) (\(session.udid.prefix(8))) "
+                + "for \"\(request.label)\" [session \(session.id.prefix(8))]")
+
+        var commandError: Error?
+        var commandStatus: Int32 = 0
+        do {
+            try session.transition(to: .booting)
+            try Simctl().bootAndWait(session.udid)
+            try session.transition(to: .running)
+            commandStatus = try runCommand(command, session: session)
+        } catch {
+            commandError = error
+        }
+
+        do {
+            try session.finish()
+            stderrPrint("🧹 Deleted private \(session.deviceName) (\(session.udid.prefix(8)))")
+        } catch {
+            stderrPrint("⚠️ \(error)")
+            if commandError == nil { commandError = error }
+        }
+
+        if let commandError { throw commandError }
+        if commandStatus != 0 { throw ExitCode(commandStatus) }
+    }
+
+    private func runCommand(_ arguments: [String], session: SimulatorSession) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = arguments
+        var environment = ProcessInfo.processInfo.environment
+        environment["SIMLEASE_SESSION_ID"] = session.id
+        environment["SIMULATOR_ID"] = session.udid
+        environment["SIMULATOR_UDID"] = session.udid
+        process.environment = environment
+        process.standardError = FileHandle.standardError
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        try process.run()
+        let signalRelay = ChildSignalRelay(process: process)
+        process.waitUntilExit()
+        let forwardedSignal = signalRelay.stop()
+        if let forwardedSignal {
+            return 128 + forwardedSignal
+        }
+        switch process.terminationReason {
+        case .exit:
+            return process.terminationStatus
+        case .uncaughtSignal:
+            return 128 + process.terminationStatus
+        @unknown default:
+            return 1
+        }
+    }
+}
+
+private final class ChildSignalRelay {
+    private var active = true
+    private var forwardedSignal: Int32?
+    private let process: Process
+    private let queue = DispatchQueue(label: "simlease.child-signal-relay")
+    private var sources: [DispatchSourceSignal] = []
+
+    init(process: Process) {
+        self.process = process
+        for signalNumber in [SIGINT, SIGTERM] {
+            Darwin.signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: queue)
+            source.setEventHandler { [weak self] in
+                self?.forward(signalNumber)
+            }
+            source.resume()
+            sources.append(source)
+        }
+    }
+
+    func stop() -> Int32? {
+        queue.sync {
+            active = false
+            sources.forEach { $0.cancel() }
+        }
+        Darwin.signal(SIGINT, SIG_DFL)
+        Darwin.signal(SIGTERM, SIG_DFL)
+        return forwardedSignal
+    }
+
+    deinit {
+        if active { _ = stop() }
+    }
+
+    private func forward(_ signalNumber: Int32) {
+        guard active else { return }
+        if forwardedSignal == nil { forwardedSignal = signalNumber }
+        guard process.isRunning else { return }
+        _ = Darwin.kill(process.processIdentifier, signalNumber)
+    }
 }
 
 struct Claim: ParsableCommand {
@@ -90,7 +224,15 @@ struct Claim: ParsableCommand {
         stderrPrint("🔒 \(verb) \(result.deviceName) (\(result.udid.prefix(8))) for \"\(request.label)\"")
         if !noBoot { Simctl().boot(result.udid) }
         if json {
-            print(#"{"udid": "\#(result.udid)", "device": "\#(result.deviceName)", "label": "\#(request.label)", "reused": \#(result.reused), "created": \#(result.created)}"#)
+            let output: [String: Any] = [
+                "created": result.created,
+                "device": result.deviceName,
+                "label": request.label,
+                "reused": result.reused,
+                "udid": result.udid,
+            ]
+            let data = try JSONSerialization.data(withJSONObject: output, options: .sortedKeys)
+            print(String(data: data, encoding: .utf8) ?? "{}")
         } else {
             print(result.udid)
         }
@@ -154,13 +296,17 @@ struct Status: ParsableCommand {
         }
         for row in rows {
             let state = row.state ?? "missing"
-            print("\(row.lease.label)  —  \(row.lease.originalName) [\(state)]  \(row.lease.agent)  \(remaining(row.lease))")
+            let lifetime = row.lease.sessionID.map { sessionID in
+                let state = row.lease.sessionState?.rawValue ?? "unknown"
+                return "session \(sessionID.prefix(8)) \(state)"
+            } ?? remaining(row.lease)
+            print("\(row.lease.label)  —  \(row.lease.originalName) [\(state)]  \(row.lease.agent)  \(lifetime)")
             print("    \(row.udid)  \(row.lease.workdir)")
         }
     }
 }
 
-struct GC: ParsableCommand {
+struct GarbageCollect: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "gc", abstract: "Reap expired leases and dead workdirs.")
 
@@ -189,7 +335,7 @@ struct FocusCommand: ParsableCommand {
             throw ExitCode(1)
         }
         let title = match.lease.renamed
-            ? Allocator.lockedName(label: match.lease.label, original: match.lease.originalName)
+            ? Allocator.lockedName(for: match.lease)
             : match.lease.originalName
         Focus.bringToFront(udid: match.udid, deviceDisplayName: title)
     }

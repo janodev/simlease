@@ -1,5 +1,5 @@
-import XCTest
 @testable import SimLeaseCore
+import XCTest
 
 final class AllocatorTests: XCTestCase {
     var dir: URL!
@@ -87,7 +87,8 @@ final class AllocatorTests: XCTestCase {
         runner.setResponse("xcrun simctl list -j devicetypes", ProcessResult(status: 0, stdout:
             #"{"devicetypes": [{"name": "iPhone 17 Pro", "identifier": "dt-17"}]}"#, stderr: ""))
         runner.setResponse("xcrun simctl list -j runtimes", ProcessResult(status: 0, stdout:
-            #"{"runtimes": [{"identifier": "rt-26", "name": "iOS 26.0", "version": "26.0", "isAvailable": true}]}"#, stderr: ""))
+            #"{"runtimes": [{"identifier": "rt-26", "name": "iOS 26.0", "version": "26.0", "isAvailable": true}]}"#,
+            stderr: ""))
         runner.setResponse("xcrun simctl create", ProcessResult(status: 0, stdout: "NEW\n", stderr: ""))
         let alloc = makeAllocator()
         _ = try alloc.claim(req("APP-1", workdir: wt("wt-a")))
@@ -155,13 +156,23 @@ final class AllocatorTests: XCTestCase {
         let results = UnsafeMutablePointer<[String]>.allocate(capacity: 1)
         results.initialize(to: [])
         let queue = DispatchQueue(label: "results")
-        DispatchQueue.concurrentPerform(iterations: 4) { i in
-            if let r = try? self.makeAllocator().claim(self.req("T\(i)", workdir: self.wt("wt-\(i)"))) {
-                queue.sync { results.pointee.append(r.udid) }
+        DispatchQueue.concurrentPerform(iterations: 4) { iteration in
+            if let result = try? self.makeAllocator().claim(
+                self.req("T\(iteration)", workdir: self.wt("wt-\(iteration)"))) {
+                queue.sync { results.pointee.append(result.udid) }
             }
         }
         XCTAssertEqual(Set(results.pointee).count, 4)
         results.deinitialize(count: 1)
         results.deallocate()
+    }
+
+    func testDefaultPathsCanBeIsolatedWithEnvironment() {
+        let home = dir.appendingPathComponent("isolated-state")
+        let paths = SimLeasePaths.default(environment: ["SIMLEASE_HOME": home.path])
+
+        XCTAssertEqual(paths.registry, home.appendingPathComponent("registry.json"))
+        XCTAssertEqual(paths.lock, home.appendingPathComponent("registry.lock"))
+        XCTAssertEqual(paths.deviceLocks, home.appendingPathComponent("device-locks"))
     }
 }

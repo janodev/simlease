@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import SimLeaseCore
+import SwiftUI
 
 @main
 struct SimLeaseApp: App {
@@ -16,6 +16,7 @@ struct SimLeaseApp: App {
                 Menu {
                     Button("Focus window") { board.focus(row) }
                     Button("Release lease") { board.release(row) }
+                        .disabled(row.lease.sessionID != nil)
                     Button("Copy UDID") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(row.id, forType: .string)
@@ -37,7 +38,8 @@ struct SimLeaseApp: App {
     func rowTitle(_ row: BoardRow) -> String {
         let dot = row.booted ? "🟢" : "⚪️"
         let expired = row.expired ? " (expired)" : ""
-        return "\(dot) \(row.lease.label) — \(row.lease.originalName)\(expired) · \(row.lease.agent)"
+        let session = row.lease.sessionState.map { " [\($0.rawValue)]" } ?? ""
+        return "\(dot) \(row.lease.label) — \(row.lease.originalName)\(expired)\(session) · \(row.lease.agent)"
     }
 }
 

@@ -6,6 +6,9 @@ build:
 test:
 	swift test
 
+lint:
+	swiftlint lint --strict
+
 install: build
 	install -d $(PREFIX)/bin
 	install .build/release/simlease $(PREFIX)/bin/simlease
@@ -13,4 +16,4 @@ install: build
 app:
 	./scripts/make-app.sh
 
-.PHONY: build test install app
+.PHONY: app build install lint test

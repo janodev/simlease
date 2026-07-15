@@ -1,5 +1,5 @@
-import XCTest
 @testable import SimLeaseCore
+import XCTest
 
 final class RegistryTests: XCTestCase {
     var dir: URL!
@@ -40,13 +40,19 @@ final class RegistryTests: XCTestCase {
         XCTAssertTrue(text.contains("expires_at"))
     }
 
-    func testCorruptFileBackedUpAndEmptyReturned() throws {
+    func testCorruptFileIsBackedUpAndFailsClosed() throws {
         let url = dir.appendingPathComponent("registry.json")
         try "{not json".write(to: url, atomically: true, encoding: .utf8)
-        let reg = try RegistryStore.load(at: url)
-        XCTAssertTrue(reg.leases.isEmpty)
+        XCTAssertThrowsError(try RegistryStore.load(at: url)) { error in
+            guard case RegistryError.corrupt(let path) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(path, url.path)
+        }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "{not json")
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: url.path + ".corrupt"))
+        XCTAssertThrowsError(try RegistryStore.load(at: url))
     }
 
     func testUnsupportedSchemaThrows() throws {

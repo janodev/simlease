@@ -1,23 +1,53 @@
 import Foundation
 
+public enum SessionState: String, Codable, Equatable {
+    case booting
+    case cleaning
+    case created
+    case quarantined
+    case running
+}
+
 public struct Lease: Codable, Equatable {
+    enum CodingKeys: String, CodingKey {
+        case agent
+        case claimedAt
+        case created
+        case expiresAt
+        case label
+        case originalName
+        case renamed
+        case sessionFailure
+        case sessionID = "sessionId"
+        case sessionState
+        case workdir
+    }
+
     public var label: String
     public var agent: String
     public var workdir: String
     public var originalName: String
     public var renamed: Bool
     public var created: Bool
+    public var sessionFailure: String?
+    public var sessionID: String?
+    public var sessionState: SessionState?
     public var claimedAt: Date
     public var expiresAt: Date
 
     public init(label: String, agent: String, workdir: String, originalName: String,
-                renamed: Bool, created: Bool, claimedAt: Date, expiresAt: Date) {
+                renamed: Bool, created: Bool, sessionID: String? = nil,
+                sessionState: SessionState? = nil, sessionFailure: String? = nil,
+                claimedAt: Date, expiresAt: Date) {
         self.label = label
         self.agent = agent
         self.workdir = workdir
         self.originalName = originalName
         self.renamed = renamed
         self.created = created
+        self.sessionFailure = sessionFailure
+        self.sessionID = sessionID
+        self.sessionState = sessionState
         self.claimedAt = claimedAt
         self.expiresAt = expiresAt
     }
@@ -31,10 +61,13 @@ public struct Registry: Codable, Equatable {
 }
 
 public enum RegistryError: Error, CustomStringConvertible {
+    case corrupt(String)
     case unsupportedSchema(Int)
 
     public var description: String {
         switch self {
+        case .corrupt(let path):
+            return "registry at \(path) is corrupt; original retained and allocation blocked"
         case .unsupportedSchema(let version):
             return "registry schema \(version) is newer than this simlease understands — upgrade simlease"
         }
@@ -66,10 +99,12 @@ public enum RegistryStore {
         } catch let error as RegistryError {
             throw error
         } catch {
-            try? FileManager.default.removeItem(atPath: url.path + ".corrupt")
-            try? FileManager.default.moveItem(atPath: url.path, toPath: url.path + ".corrupt")
-            FileHandle.standardError.write(Data("simlease: registry was corrupt, backed up to .corrupt\n".utf8))
-            return .empty
+            let backupPath = url.path + ".corrupt"
+            try? FileManager.default.removeItem(atPath: backupPath)
+            try? FileManager.default.copyItem(atPath: url.path, toPath: backupPath)
+            FileHandle.standardError.write(Data(
+                "simlease: registry is corrupt; original retained and allocation blocked\n".utf8))
+            throw RegistryError.corrupt(url.path)
         }
     }
 

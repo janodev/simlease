@@ -1,8 +1,8 @@
 import Darwin
 import Foundation
+@testable import SimLeaseCore
 import Testing
 import XCTest
-@testable import SimLeaseCore
 
 @Suite("Kernel-backed file lock")
 struct FileLockTests {

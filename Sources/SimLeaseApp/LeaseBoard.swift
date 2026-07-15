@@ -38,26 +38,27 @@ final class LeaseBoard: ObservableObject {
         let now = Date()
         rows = result.map { row in
             BoardRow(id: row.udid, lease: row.lease,
-                     booted: row.state == "Booted", expired: row.lease.expiresAt < now)
+                     booted: row.state == "Booted",
+                     expired: row.lease.sessionID == nil && row.lease.expiresAt < now)
         }
     }
 
     private func watchRegistry() {
         let url = SimLeasePaths.default().registry.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        let fd = open(url.path, O_EVTONLY)
-        guard fd >= 0 else { return }
+        let descriptor = open(url.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
         let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd, eventMask: .write, queue: .main)
+            fileDescriptor: descriptor, eventMask: .write, queue: .main)
         source.setEventHandler { [weak self] in self?.refresh() }
-        source.setCancelHandler { close(fd) }
+        source.setCancelHandler { close(descriptor) }
         source.resume()
         watcher = source
     }
 
     func focus(_ row: BoardRow) {
         let title = row.lease.renamed
-            ? Allocator.lockedName(label: row.lease.label, original: row.lease.originalName)
+            ? Allocator.lockedName(for: row.lease)
             : row.lease.originalName
         Focus.bringToFront(udid: row.id, deviceDisplayName: title)
     }

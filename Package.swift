@@ -7,10 +7,10 @@ let package = Package(
     products: [
         .library(name: "SimLeaseCore", targets: ["SimLeaseCore"]),
         .executable(name: "simlease", targets: ["simlease"]),
-        .executable(name: "SimLeaseApp", targets: ["SimLeaseApp"]),
+        .executable(name: "SimLeaseApp", targets: ["SimLeaseApp"])
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0")
     ],
     targets: [
         .target(name: "CSimLeaseSystem"),
@@ -19,10 +19,10 @@ let package = Package(
             name: "simlease",
             dependencies: [
                 "SimLeaseCore",
-                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
             ]
         ),
         .executableTarget(name: "SimLeaseApp", dependencies: ["SimLeaseCore"]),
-        .testTarget(name: "SimLeaseCoreTests", dependencies: ["SimLeaseCore"]),
+        .testTarget(name: "SimLeaseCoreTests", dependencies: ["SimLeaseCore"])
     ]
 )

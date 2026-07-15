@@ -1,5 +1,5 @@
-import XCTest
 @testable import SimLeaseCore
+import XCTest
 
 final class SimctlTests: XCTestCase {
     func testDevicesParsesFlattenedList() throws {
@@ -130,7 +130,7 @@ final class SimctlTests: XCTestCase {
 
         XCTAssertEqual(runner.calls, [
             ["xcrun", "simctl", "boot", "DEVICE"],
-            ["xcrun", "simctl", "bootstatus", "DEVICE", "-b"],
+            ["xcrun", "simctl", "bootstatus", "DEVICE", "-b"]
         ])
     }
 
@@ -164,7 +164,7 @@ final class SimctlTests: XCTestCase {
 
         XCTAssertEqual(runner.calls, [
             ["xcrun", "simctl", "boot", "DEVICE"],
-            ["xcrun", "simctl", "bootstatus", "DEVICE", "-b"],
+            ["xcrun", "simctl", "bootstatus", "DEVICE", "-b"]
         ])
     }
 
