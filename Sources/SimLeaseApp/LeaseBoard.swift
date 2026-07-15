@@ -1,7 +1,8 @@
 import Foundation
+import Observation
 import SimLeaseCore
 
-struct BoardRow: Identifiable {
+struct BoardRow: Equatable, Identifiable {
     let id: String
     let lease: Lease
     let booted: Bool
@@ -9,16 +10,21 @@ struct BoardRow: Identifiable {
 }
 
 @MainActor
-final class LeaseBoard: ObservableObject {
-    @Published var rows: [BoardRow] = []
-    private var timer: Timer?
-    private var gcTimer: Timer?
-    private var watcher: DispatchSourceFileSystemObject?
+@Observable
+final class LeaseBoard {
+    private(set) var cleanupError: String?
+    private(set) var rows: [BoardRow] = []
+    private(set) var statusError: String?
+
+    @ObservationIgnored private var gcTask: Task<Void, Never>?
+    @ObservationIgnored private var gcTimer: Timer?
+    @ObservationIgnored private var refreshTimer: Timer?
+    @ObservationIgnored private var watcher: DispatchSourceFileSystemObject?
 
     init() {
         refresh()
         watchRegistry()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
         autoGC()
@@ -27,19 +33,29 @@ final class LeaseBoard: ObservableObject {
         }
     }
 
+    deinit {
+        gcTask?.cancel()
+        gcTimer?.invalidate()
+        refreshTimer?.invalidate()
+        watcher?.cancel()
+    }
+
     func autoGC() {
-        Task.detached(priority: .utility) {
-            _ = try? Allocator().gc()
-        }
+        performGC()
     }
 
     func refresh() {
-        let result = (try? Allocator().status()) ?? []
-        let now = Date()
-        rows = result.map { row in
-            BoardRow(id: row.udid, lease: row.lease,
-                     booted: row.state == "Booted",
-                     expired: row.lease.sessionID == nil && row.lease.expiresAt < now)
+        do {
+            let result = try Allocator().status()
+            let now = Date()
+            rows = result.map { row in
+                BoardRow(id: row.udid, lease: row.lease,
+                         booted: row.state == "Booted",
+                         expired: row.lease.sessionID == nil && row.lease.expiresAt < now)
+            }
+            statusError = nil
+        } catch {
+            statusError = String(describing: error)
         }
     }
 
@@ -64,12 +80,35 @@ final class LeaseBoard: ObservableObject {
     }
 
     func release(_ row: BoardRow) {
-        _ = try? Allocator().release(workdir: nil, udid: row.id, label: nil)
+        do {
+            _ = try Allocator().release(workdir: nil, udid: row.id, label: nil)
+            cleanupError = nil
+        } catch {
+            cleanupError = String(describing: error)
+        }
         refresh()
     }
 
     func runGC() {
-        _ = try? Allocator().gc()
-        refresh()
+        performGC()
+    }
+
+    private func performGC() {
+        guard gcTask == nil else { return }
+        gcTask = Task { [weak self] in
+            let failure = await Task.detached(priority: .utility) {
+                do {
+                    _ = try Allocator().gc()
+                    return nil as String?
+                } catch {
+                    return String(describing: error)
+                }
+            }.value
+
+            guard let self else { return }
+            gcTask = nil
+            cleanupError = failure
+            refresh()
+        }
     }
 }

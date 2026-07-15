@@ -35,7 +35,7 @@ final class RegistryTests: XCTestCase {
             label: "x", agent: "a", workdir: "/w", originalName: "iPhone",
             renamed: false, created: true, claimedAt: Date(), expiresAt: Date())
         try RegistryStore.save(reg, to: url)
-        let text = try String(contentsOf: url)
+        let text = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(text.contains("original_name"))
         XCTAssertTrue(text.contains("expires_at"))
     }

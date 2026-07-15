@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "simlease",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS("27.0")],
     products: [
         .library(name: "SimLeaseCore", targets: ["SimLeaseCore"]),
         .executable(name: "simlease", targets: ["simlease"]),
