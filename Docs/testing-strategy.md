@@ -25,6 +25,9 @@ in-process fakes:
 * command tests verify environment export, boot-readiness gating, child exit
   propagation, `SIGTERM` forwarding, cleanup, and delete-only GC after killing
   the supervisor;
+* macOS UI command tests verify cross-process serialization, direct-exec PID
+  continuity, environment export, exact child status, and release after
+  `SIGKILL`;
 * menu-board tests verify status loading leaves the main thread and overlapping
   timer, watcher, or user refresh requests never run concurrently; and
 * injected `Simctl` tests make nonzero status, malformed JSON, missing fields,
@@ -62,6 +65,8 @@ state and must never use `~/.simlease`.
 | Boot-readiness failure | Child is skipped and cleanup runs. | Covered |
 | Catchable termination | `SIGTERM` reaches the child; cleanup runs; signal-derived status is returned. | Covered |
 | Supervisor `SIGKILL` | Registry remains abandoned; subsequent GC deletes and clears it. | Covered with scripted Simulator |
+| Concurrent macOS UI workflows | A second executable remains blocked until the first command exits, then receives its own session environment. | Covered at CLI integration layer |
+| macOS UI command `SIGKILL` | Killing the direct-exec command releases the inherited host lock and a waiting contender proceeds. | Covered at CLI integration layer |
 | Cleanup failure and retry | Session becomes quarantined; later cleanup succeeds; failed GC retains quarantine. | Covered at core layer |
 | Foreground final-cleanup lock scope | A cleanup hook acquires the registry lock while checked shutdown is running. | Covered at core layer |
 | Reconciliation lock scope | Legacy and abandoned-session Simulator cleanup still runs under the global registry lock. | Remaining availability work |

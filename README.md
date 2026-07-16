@@ -13,9 +13,14 @@ over another's simulator, change its state, or close it mid-test. SimLease gives
 each complete workflow a private disposable simulator and keeps ownership for as
 long as the workflow runs.
 
+For macOS UI testing, SimLease also provides one host-wide lock so agents do not
+steal keyboard focus, move windows, or capture each other's screenshots.
+
 - 🔒 **Crash-safe sessions** — `simlease run` creates a new simulator, retains a
   kernel lock, waits for boot readiness, supervises a command, then deletes the
   simulator.
+- 🖥️ **Exclusive macOS UI** — `simlease macos-ui` queues complete desktop UI
+  workflows behind one crash-released host lock.
 - 🏷️ **Recognizable windows** — session names include the task and a short
   session ID, such as `🔒 checkout-redesign [A1B2C3D4] · iPhone 17 Pro`.
 - 📋 **A menubar board** — SimLease.app shows leases and session state, focuses
@@ -78,6 +83,24 @@ Exiting the command or shell triggers checked shutdown and deletion. A nonzero
 child status is preserved; any concurrent cleanup failure is also reported and
 retained as quarantine state.
 
+### macOS UI testing
+
+Wrap the complete focus-sensitive workflow in the fixed host-wide gate:
+
+```bash
+simlease macos-ui --label "checkout-redesign" -- caffeinate -dimsu zsh -lc '
+  set -euo pipefail
+  make build-macos
+  make test-ui-file FILE=MyAppUITests METHOD=testCheckout
+'
+```
+
+A second agent waits by default. The command directly inherits the kernel lock,
+so normal exit, failure, or a crash releases it automatically while preserving
+the command's exact exit status. Use `--wait 0` to fail immediately when busy or
+a bound such as `--wait 90m`. Keep build, launch, interaction, screenshots, and
+teardown inside the command. See the [macOS UI lock playbook](Docs/macos-ui-lock.md).
+
 ## Using it with coding agents
 
 This repository ships an agent skill:
@@ -135,6 +158,7 @@ SimLease.app is a menu-only utility that watches the shared registry:
 | Command | Behavior |
 |---|---|
 | `simlease run` / `simlease with` | Create a private disposable simulator, wait for readiness, run one command, and clean up. Options: `--label`, `--agent`, `--device`. |
+| `simlease macos-ui` | Wait for exclusive macOS UI automation access, then directly run one complete workflow. Options: `--label`, `--agent`, `--wait`. |
 | `simlease status` | Show cooperative leases and session ID/state; use `--json` for the registry document. |
 | `simlease gc` | Reap expired legacy leases and retry delete-only abandoned or quarantined sessions. Never reaps a lock-held session. |
 | `simlease focus <label\|udid>` | Bring a leased Simulator window to the front; omit the argument for the current worktree's cooperative lease. |
@@ -152,6 +176,9 @@ SimLease.app is a menu-only utility that watches the shared registry:
   `~/.simlease/device-locks/<UDID>.lock` across boot, child work, and cleanup.
 - Lock files are persistent regular files. SimLease closes descriptors to
   release ownership and never steals or unlinks a lock by age.
+- macOS UI workflows share one flock at
+  `~/.simlease/host-locks/macos-ui.lock`. Its descriptor intentionally survives
+  `exec` so the workflow command owns it until exit.
 - Allocation-critical Simulator discovery validates process status and JSON.
   Existing unreadable, corrupt, or unsupported registry data fails closed rather
   than becoming an empty ownership view.

@@ -11,7 +11,7 @@ status: current
 
 SimLease changed from a cooperative lease tracker into a crash-safe Simulator
 supervisor. The original baseline is commit `7df4924`; the current comparison
-target is commit `75349d7`.
+target is the current `main` branch.
 
 # Comparison
 
@@ -20,6 +20,7 @@ target is commit `75349d7`.
 | Ownership | Worktree-sticky registry entry with TTL. | Live per-UDID kernel `flock` held for the complete workflow. |
 | Isolation | Reused existing simulators when possible. | Every `simlease run` receives a unique disposable simulator. |
 | Concurrency | Same-worktree processes could collide. | Concurrent runs, including runs from one worktree, receive distinct devices. |
+| macOS UI coordination | No desktop-wide ownership primitive. | One fixed `macos-ui` kernel lock serializes focus-sensitive workflows across cooperating agents. |
 | Lock recovery | A removable directory lock could be stolen after ten seconds. | Persistent kernel locks are released automatically on process death and are never stolen by age. |
 | Lifecycle | Callers used `claim`, unrelated manual commands, and `release`. | One supervisor creates, boots, runs, cleans, and deletes. |
 | Readiness | Booting was separate from the caller's complete lifecycle. | Checked boot and blocking `bootstatus` finish before child work starts. |
@@ -32,7 +33,7 @@ target is commit `75349d7`.
 | Subprocess output | Large simultaneous stdout and stderr could deadlock. | Both pipes drain concurrently. |
 | Menu app | A basic synchronous lease board performed periodic reaping. | An Observation-based board loads status off the main actor, coalesces refreshes, presents errors, retries cleanup, focuses windows, copies UDIDs, and tears down resources. |
 | Agent workflow | Guidance recommended cooperative claims first. | Guidance prefers one `simlease run` boundary with `caffeinate`, exact UDIDs, deterministic UI-test state, and automatic cleanup. |
-| Evidence | Coverage and architecture guidance were limited. | Validation includes 42 XCTest and 30 Swift Testing tests, strict lint, release and signed-app checks, real-Simulator smoke testing, and an OKF knowledge bundle. |
+| Evidence | Coverage and architecture guidance were limited. | Validation includes broad XCTest and Swift Testing coverage, strict lint, release and signed-app checks, real-Simulator smoke testing, and an OKF knowledge bundle. |
 
 # Compatibility Commands
 

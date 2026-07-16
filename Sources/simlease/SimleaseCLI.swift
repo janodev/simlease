@@ -41,6 +41,23 @@ func parseTTL(_ raw: String) throws -> TimeInterval {
     throw ValidationError("invalid --ttl '\(raw)' (use 7200, 90m or 2h)")
 }
 
+func parseWait(_ raw: String) throws -> TimeInterval {
+    let value = raw.lowercased()
+    if value == "forever" { return .infinity }
+    let seconds: TimeInterval?
+    if value.hasSuffix("h"), let hours = Double(value.dropLast()) {
+        seconds = hours * 3600
+    } else if value.hasSuffix("m"), let minutes = Double(value.dropLast()) {
+        seconds = minutes * 60
+    } else {
+        seconds = Double(value)
+    }
+    guard let seconds, seconds >= 0 else {
+        throw ValidationError("invalid --wait '\(raw)' (use 0, 90m, 2h or forever)")
+    }
+    return seconds
+}
+
 func remaining(_ lease: Lease, now: Date = Date()) -> String {
     let seconds = Int(lease.expiresAt.timeIntervalSince(now))
     if seconds <= 0 { return "expired" }
@@ -51,9 +68,9 @@ func remaining(_ lease: Lease, now: Date = Date()) -> String {
 struct Simlease: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "simlease",
-        abstract: "Run isolated simulator sessions or manage cooperative simulator leases.",
+        abstract: "Coordinate isolated Simulator sessions and exclusive macOS UI work.",
         subcommands: [
-            Run.self, Claim.self, Release.self, Renew.self, Status.self,
+            Run.self, MacOSUI.self, Claim.self, Release.self, Renew.self, Status.self,
             GarbageCollect.self, FocusCommand.self,
         ],
         defaultSubcommand: Claim.self)

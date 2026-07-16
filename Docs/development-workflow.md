@@ -13,7 +13,7 @@ Read [current architecture](current-architecture.md) and
 [session architecture](session-architecture.md) before changing locks,
 allocation, Simulator lifecycle, registry persistence, process supervision, or
 CLI behavior. Decide whether a change affects safe foreground sessions,
-cooperative legacy leases, or both.
+the host-wide macOS UI gate, cooperative legacy leases, or more than one model.
 
 # Repository Map
 
@@ -75,6 +75,8 @@ is in scope. Do not point tests at the developer's live state. Set
 * Use monotonic time for lock deadlines and wall time for persisted diagnostics.
 * Keep lock files persistent, close descriptors to release, and use
   close-on-exec unless inheritance is an intentional tested design.
+* Keep `macos-ui` a fixed host resource. Its direct-exec inheritance is
+  intentional; include the entire focus-sensitive lifecycle beneath it.
 * Persist session transitions before relying on them for recovery. Turn cleanup
   failures into quarantine, never silent success or reuse.
 * Sort imports alphabetically and keep source compatibility changes deliberate.
@@ -128,6 +130,8 @@ Before merging a locking, session, or recovery change, verify:
   state and observable diagnostics.
 * Abandoned session devices remain delete-only.
 * New crash paths appear in the [failure matrix](testing-strategy.md).
+* macOS UI changes preserve command exit status and automatic lock release on
+  process death.
 * README, bundled skill, and docs do not apply `run` guarantees to legacy claims.
 
 # Documentation Maintenance

@@ -175,6 +175,8 @@ final class AllocatorTests: XCTestCase {
         XCTAssertEqual(paths.lock, home.appendingPathComponent("registry.lock"))
         XCTAssertEqual(paths.legacyLock, home.appendingPathComponent("lock"))
         XCTAssertEqual(paths.deviceLocks, home.appendingPathComponent("device-locks"))
+        XCTAssertEqual(paths.hostLocks, home.appendingPathComponent("host-locks"))
+        XCTAssertEqual(paths.macOSUILock, home.appendingPathComponent("host-locks/macos-ui.lock"))
     }
 
     func testLegacyTwoArgumentPathsUseDistinctV2Lock() {

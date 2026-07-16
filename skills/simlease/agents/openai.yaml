@@ -1,4 +1,4 @@
 interface:
   display_name: "SimLease"
-  short_description: "Run isolated crash-safe Simulator sessions"
-  default_prompt: "Use $simlease to run this iOS Simulator workflow without colliding with other agents."
+  short_description: "Coordinate Simulator and macOS UI sessions"
+  default_prompt: "Use $simlease to run this Simulator or macOS UI workflow without colliding with other agents."

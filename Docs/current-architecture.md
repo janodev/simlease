@@ -1,7 +1,7 @@
 ---
 type: Architecture Reference
 title: Current Architecture and Limitations
-description: Describes the implemented foreground-session and cooperative-lease models, their ownership authority, and recovery boundaries.
+description: Describes Simulator sessions, the macOS UI gate, cooperative leases, ownership authority, and recovery boundaries.
 tags: [architecture, current-state, concurrency, recovery]
 timestamp: 2026-07-15T00:00:00Z
 status: implemented
@@ -10,26 +10,28 @@ status: implemented
 # Scope
 
 This document describes the current source. The foreground session runner was
-introduced in commit `92213b6`. SimLease has two deliberately different safety
-classes:
+introduced in commit `92213b6`. SimLease has three deliberately different
+coordination models:
 
 * `simlease run` and its `simlease with` alias supervise one complete workflow
   on a new disposable simulator while retaining a kernel lock.
+* `simlease macos-ui` serializes one complete focus-sensitive desktop workflow
+  behind a fixed host-wide kernel lock.
 * `claim`, `renew`, and `release` remain cooperative compatibility commands.
   Their ownership is registry metadata with a TTL, not a workflow-wide lock.
 
-Prefer `run` whenever one command or child shell can contain the whole build,
-install, launch, test, inspection, and screenshot workflow.
+Prefer `run` for Simulator isolation and `macos-ui` for desktop focus exclusion
+whenever one command or child shell can contain the complete workflow.
 
 # Components
 
 | Component | Implemented responsibility |
 |---|---|
-| `simlease` CLI | Starts supervised sessions, manages legacy leases, reports status, runs GC, and focuses Simulator windows. |
+| `simlease` CLI | Starts supervised Simulator sessions, serializes macOS UI work, manages legacy leases, reports status, runs GC, and focuses Simulator windows. |
 | `SessionManager` and `SimulatorSession` | Create a private simulator, retain its per-UDID lock, persist lifecycle state, and perform checked cleanup. |
 | `Allocator` | Serializes registry mutations, manages legacy claims, excludes session devices, and reconciles registered abandoned sessions delete-only. |
 | `RegistryTransaction` | Holds the v2 global kernel lock and performs the one-time schema fence through the v1-compatible migration barrier. |
-| `FileLock` | Holds Darwin `flock` locks on persistent regular files with monotonic acquisition deadlines and close-on-exec descriptors. |
+| `FileLock` | Holds Darwin `flock` locks on persistent regular files with monotonic acquisition deadlines and explicit descriptor-inheritance policy. |
 | `LegacyMigrationLock` | Briefly uses v1's removable-directory protocol only while fencing schema 1 to schema 2. |
 | `RegistryStore` | Persists schema-2 JSON, migrates schema 1, and fails closed when an existing path is unreadable, corrupt, or uses an unsupported schema. |
 | `Simctl` | Validates discovery output and exposes checked create, boot-readiness, shutdown, and deletion operations. |
@@ -60,6 +62,21 @@ The implementation lives in [`Sources/SimLeaseCore`](../Sources/SimLeaseCore/),
 Each invocation receives a new session ID and simulator, including concurrent
 or sequential runs from the same Git worktree. Names are presentation hints;
 every operation uses the exact UDID.
+
+# macOS UI Gate
+
+`simlease macos-ui [options] -- <command...>` acquires the single fixed lock at
+`~/.simlease/host-locks/macos-ui.lock`, exports a session identifier, and
+replaces itself with the requested command. The descriptor intentionally
+survives `exec`, so the workflow command owns the lock directly and its exit
+status and signal behavior remain unchanged. Kernel cleanup releases ownership
+after ordinary exit or process death.
+
+This gate is separate from Simulator allocation and registry state. It protects
+the shared desktop input, focus, window, and screenshot surface for cooperating
+agents. It does not stop a process that bypasses SimLease, and it is not shown
+in the current menubar board. See the [operational playbook](macos-ui-lock.md)
+for the required workflow boundary and environment contract.
 
 # Ownership Authority
 
@@ -106,6 +123,7 @@ process is still using it.
 | Shutdown or deletion fails | The record remains in `quarantined` state with failure detail and is never reused. Later GC may retry delete-only cleanup. |
 | Registry is unreadable or cannot decode | Mutating operations fail closed; corrupt bytes remain available for diagnosis. |
 | Legacy migration barrier remains held or has an incompatible file type | Schema 1 remains unchanged and mutation fails closed; v2 never removes the path by age. |
+| macOS UI command exits or crashes | The inherited host-lock descriptor closes and the next waiting workflow proceeds. No registry reconciliation is required. |
 
 Recovery never adopts an abandoned session simulator into a later session or
 legacy claim. Legacy allocation also excludes every `🔒`-prefixed simulator and

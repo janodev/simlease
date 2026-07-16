@@ -1,6 +1,7 @@
 import Foundation
 
 public struct SimLeasePaths {
+    public let hostLocks: URL
     public let legacyLock: URL
     public let registry: URL
     public let lock: URL
@@ -10,6 +11,7 @@ public struct SimLeasePaths {
         registry: URL,
         lock: URL,
         deviceLocks: URL? = nil,
+        hostLocks: URL? = nil,
         legacyLock: URL? = nil
     ) {
         let stateDirectory = registry.deletingLastPathComponent()
@@ -25,6 +27,8 @@ public struct SimLeasePaths {
         self.registry = registry
         self.deviceLocks = deviceLocks
             ?? stateDirectory.appendingPathComponent("device-locks")
+        self.hostLocks = hostLocks
+            ?? stateDirectory.appendingPathComponent("host-locks")
     }
 
     public static func `default`(
@@ -35,11 +39,16 @@ public struct SimLeasePaths {
         return SimLeasePaths(registry: base.appendingPathComponent("registry.json"),
                              lock: base.appendingPathComponent("registry.lock"),
                              deviceLocks: base.appendingPathComponent("device-locks"),
+                             hostLocks: base.appendingPathComponent("host-locks"),
                              legacyLock: base.appendingPathComponent("lock"))
     }
 
     public func deviceLock(for udid: String) -> URL {
         deviceLocks.appendingPathComponent("\(udid).lock")
+    }
+
+    public var macOSUILock: URL {
+        hostLocks.appendingPathComponent("macos-ui.lock")
     }
 }
 

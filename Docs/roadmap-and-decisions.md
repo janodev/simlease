@@ -24,10 +24,22 @@ status: active
 | 1. Reliability foundation | Implemented | Kernel-backed global/per-device locks and strict checked `simctl` APIs. | Add focused close-on-exec inheritance evidence. |
 | 2. Foreground sessions | Implemented | `simlease run` and `with`, one disposable simulator per run, boot readiness, child environment, signals, and checked cleanup. | Add concurrent executable-level and automated real-Simulator coverage. |
 | 3. Recovery and observability | Partial | Session phases, quarantine, delete-only abandoned-session GC, fail-closed corruption, status/error presentation, and cleanup retry in the app. | Close the create-before-registry window and add per-UDID cancellation and recovery controls. |
+| 3a. macOS UI exclusion | Implemented | One fixed host-wide `macos-ui` lock spanning a complete focus-sensitive workflow. | Menubar visibility is optional future observability work. |
 | 4. Brokered sessions | Future proposal | Daemon or Unix-domain-socket broker for safe reconnectable ownership across invocations. | Separate design review after foreground recovery is complete. |
 | 5. Warm performance | Future proposal | Templates, cloning, or another startup optimization. | Prove disposable isolation and every safety invariant remain intact. |
 
 # Decision Log
+
+## 2026-07-15 - macOS UI automation uses one fixed host-wide lock
+
+**Implemented.** `simlease macos-ui -- <command...>` waits for one shared
+desktop resource and directly replaces itself with the command while preserving
+the lock descriptor across `exec`.
+
+Reason: macOS input and focus are global even when agents build different apps.
+A fixed resource prevents mismatched caller-chosen names, and direct ownership
+means exit or crash releases the kernel lock without a supervisor or stale-lock
+recovery protocol.
 
 ## 2026-07-15 - Foreground `run` is the safe workflow primitive
 

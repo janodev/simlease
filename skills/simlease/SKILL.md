@@ -1,6 +1,6 @@
 ---
 name: simlease
-description: Run isolated iOS Simulator build, install, launch, test, inspection, or screenshot workflows with SimLease. Use whenever simulator work could overlap another agent or process; prefer one crash-safe `simlease run` session around the complete workflow, and use cooperative `claim` only when unrelated invocations cannot be supervised together.
+description: Coordinate isolated iOS Simulator workflows and exclusive macOS UI automation with SimLease. Use whenever device work or desktop interaction could overlap another agent; prefer one crash-safe command boundary around the complete workflow.
 ---
 
 # SimLease
@@ -74,3 +74,22 @@ release on every exit path, and prefer `simlease run` whenever possible.
 
 Use `simlease status` for ownership and lifecycle evidence. Use
 `simlease focus <label-or-udid>` to raise the corresponding Simulator window.
+
+## Serialize macOS UI automation
+
+macOS UI tests share the host's keyboard, pointer, focus, windows, and screenshot
+surface. Wrap the complete workflow in the one fixed desktop gate:
+
+```bash
+simlease macos-ui --label "<short task name>" -- caffeinate -dimsu zsh -lc '
+  set -euo pipefail
+  make build-macos
+  make test-ui-file FILE=AppUITests METHOD=testExample
+'
+```
+
+Keep build, launch, fixture setup, interaction, inspection, screenshots, and
+teardown inside that command. A second agent waits by default. The child
+receives `SIMLEASE_HOST_RESOURCE=macos-ui`, `SIMLEASE_MACOS_UI=1`, and a unique
+`SIMLEASE_SESSION_ID`. Exit or crash releases the inherited kernel lock. Use
+`--wait 0` only when failing immediately on contention is preferable to waiting.

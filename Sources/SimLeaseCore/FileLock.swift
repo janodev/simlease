@@ -35,11 +35,22 @@ public final class FileLock {
     private static let retryIntervalNanoseconds: UInt64 = 25_000_000
 
     private var descriptor: Int32 = -1
+    private let inheritOnExec: Bool
     private let stateLock = NSLock()
+
+    private var openFlags: Int32 {
+        let commonFlags = O_RDWR | O_CREAT | O_NOFOLLOW
+        return inheritOnExec ? commonFlags : commonFlags | O_CLOEXEC
+    }
 
     /// `staleAfter` remains in the signature for source compatibility. Kernel locks
     /// are released when their file descriptor closes and are never stolen by age.
-    public init(path: URL, staleAfter _: TimeInterval = 10) {
+    public init(
+        path: URL,
+        staleAfter _: TimeInterval = 10,
+        inheritOnExec: Bool = false
+    ) {
+        self.inheritOnExec = inheritOnExec
         self.path = path
     }
 
@@ -59,11 +70,7 @@ public final class FileLock {
         var openError = EINVAL
         let openedDescriptor: Int32 = path.withUnsafeFileSystemRepresentation { fileSystemPath in
             guard let fileSystemPath else { return -1 }
-            let result = Darwin.open(
-                fileSystemPath,
-                O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
-                S_IRUSR | S_IWUSR
-            )
+            let result = Darwin.open(fileSystemPath, openFlags, S_IRUSR | S_IWUSR)
             if result < 0 {
                 openError = errno
             }
