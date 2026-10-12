@@ -3,7 +3,7 @@ type: Operational Playbook
 title: Exclusive macOS UI Automation
 description: Defines the host-wide lock that serializes macOS UI testing across cooperating agents.
 tags: [macos, ui-testing, concurrency, locking, agents]
-timestamp: 2026-07-15T00:00:00Z
+timestamp: 2026-10-12T00:00:00Z
 status: implemented
 ---
 
@@ -24,6 +24,21 @@ simlease macos-ui --label "notika-format-menu" -- caffeinate -dimsu zsh -lc '
 
 Every cooperating agent on the Mac uses the same `macos-ui` resource. A second
 invocation waits by default until the current workflow exits.
+
+# User App Launches
+
+Launching a macOS app for the user's manual testing does not require this gate.
+Use the project's managed build-only route, then open the exact newly built
+app normally and leave it available to the user. A supervised run command that
+requires the desktop lease belongs to the agent automation workflow; use a
+build followed by a normal launch for the user instead.
+
+The gate coordinates agents that operate the keyboard, pointer, accessibility
+or screenshot surface. The user can recognize visible UI testing and avoid
+interference. Release the gate after the agent's interaction and required
+teardown; do not extend it across manual testing or waits for user input.
+Compilation coordination remains independent, and Simulator work still needs
+its own private device session.
 
 # Ownership Contract
 

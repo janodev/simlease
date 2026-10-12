@@ -101,6 +101,13 @@ the command's exact exit status. Use `--wait 0` to fail immediately when busy or
 a bound such as `--wait 90m`. Keep build, launch, interaction, screenshots, and
 teardown inside the command. See the [macOS UI lock playbook](Docs/macos-ui-lock.md).
 
+When the user asks to launch a macOS app for manual testing, build it through
+the project's managed build route and open the resulting app normally, without
+`simlease macos-ui`. The desktop lease coordinates agent UI interaction and
+tests; release it after that interaction and teardown rather than retaining it
+through the user's app session. Simulator isolation and compilation locks keep
+their existing scope.
+
 ## Using it with coding agents
 
 This repository ships an agent skill:

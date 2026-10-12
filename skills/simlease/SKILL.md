@@ -1,12 +1,30 @@
 ---
 name: simlease
-description: Coordinate isolated iOS Simulator workflows and exclusive macOS UI automation with SimLease. Use whenever device work or desktop interaction could overlap another agent; prefer one crash-safe command boundary around the complete workflow.
+description: Coordinate isolated iOS Simulator workflows and exclusive macOS UI automation between agents. Use for simulator work or agent-driven UI interaction and tests. Ordinary macOS app launches for the user's manual testing do not need this skill or a desktop lease.
 ---
 
 # SimLease
 
 Use [SimLease](https://github.com/janodev/simlease) to prevent parallel workflows
 from sharing an iOS simulator. Never select an arbitrary UDID.
+
+## Choose the workflow
+
+For a macOS app launch requested by the user for manual testing, build through
+the project's managed build route, then open the exact resulting app normally.
+Leave it available to the user without a SimLease desktop lock. If a project's
+supervised run command requires a desktop lease, use its build-only route and
+a normal launch instead. Keep compilation coordination; a user launch does
+not require reading this skill or starting UI automation.
+
+Use `simlease macos-ui` when an agent will operate the UI, inspect accessibility,
+capture screenshots, or run UI tests. The lease coordinates agents sharing the
+desktop. The user can see UI testing in progress and avoid interference.
+Release it once the agent's interaction and required teardown finish; do not
+hold it during manual testing or while waiting for the user.
+
+Simulator workflows still use a private `simlease run` session and its exported
+device identity, including launches on that managed simulator.
 
 ## Run the complete workflow
 
