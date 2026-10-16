@@ -1,4 +1,5 @@
 @testable import SimLeaseCore
+import Testing
 import XCTest
 
 final class SimctlTests: XCTestCase {
@@ -265,5 +266,37 @@ final class SimctlTests: XCTestCase {
         XCTAssertTrue(simctl.shutdown("DEVICE"))
         XCTAssertTrue(simctl.delete("DEVICE"))
         XCTAssertTrue(simctl.rename("DEVICE", to: "New Name"))
+    }
+}
+
+struct IOSRuntimeCompatibilityTests {
+    static let cases: [(String, String?)] = [
+        ("ipad", "general-27-2"),
+        ("iphone", "phone-27-2"),
+        ("older-ipad", "general-27-0"),
+        ("unsupported", nil)
+    ]
+
+    @Test(arguments: cases)
+    func runtimeSupportsRequestedDevice(_ deviceTypeID: String, expected: String?) throws {
+        let runner = FakeRunner()
+        runner.setResponse("xcrun simctl list -j runtimes", ProcessResult(
+            status: 0,
+            stdout: """
+            {"runtimes":[
+              {"identifier":"phone-27-2","name":"iOS 27.2","version":"27.2",
+               "isAvailable":true,"supportedDeviceTypes":[{"identifier":"iphone"}]},
+              {"identifier":"general-27-2","name":"iOS 27.2","version":"27.2",
+               "isAvailable":true,"supportedDeviceTypes":[{"identifier":"ipad"}]},
+              {"identifier":"general-27-0","name":"iOS 27.0","version":"27.0",
+               "isAvailable":true,"supportedDeviceTypes":[{"identifier":"older-ipad"}]},
+              {"identifier":"unavailable-28","name":"iOS 28.0","version":"28.0",
+               "isAvailable":false,"supportedDeviceTypes":[{"identifier":"ipad"}]},
+              {"identifier":"unknown-29","name":"iOS 29.0","version":"29.0",
+               "isAvailable":true}
+            ]}
+            """,
+            stderr: ""))
+        #expect(try Simctl(runner: runner).latestIOSRuntime(supporting: deviceTypeID) == expected)
     }
 }

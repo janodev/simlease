@@ -87,7 +87,7 @@ final class AllocatorTests: XCTestCase {
         runner.setResponse("xcrun simctl list -j devicetypes", ProcessResult(status: 0, stdout:
             #"{"devicetypes": [{"name": "iPhone 17 Pro", "identifier": "dt-17"}]}"#, stderr: ""))
         runner.setResponse("xcrun simctl list -j runtimes", ProcessResult(status: 0, stdout:
-            #"{"runtimes": [{"identifier": "rt-26", "name": "iOS 26.0", "version": "26.0", "isAvailable": true}]}"#,
+            #"{"runtimes": [{"identifier": "rt-26", "name": "iOS 26.0", "version": "26.0", "isAvailable": true, "supportedDeviceTypes": [{"identifier": "dt-17"}]}]}"#,
             stderr: ""))
         runner.setResponse("xcrun simctl create", ProcessResult(status: 0, stdout: "NEW\n", stderr: ""))
         let alloc = makeAllocator()

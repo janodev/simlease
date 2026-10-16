@@ -43,6 +43,9 @@ open dist/SimLease.app
 ```
 
 Requires macOS 27+ and Xcode with an available iOS Simulator runtime.
+New simulators use the newest available iOS runtime whose supported device types
+include the requested device. Device-specific runtimes, such as an iPhone-only
+runtime, are skipped for iPad requests.
 
 When upgrading from the original schema-1 release, replace both the CLI and
 SimLease.app. The first v2 mutation migrates the registry to schema 2. The

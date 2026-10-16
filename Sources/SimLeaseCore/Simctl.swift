@@ -263,11 +263,18 @@ public struct Simctl {
         return nil
     }
 
-    public func latestIOSRuntime() throws -> String? {
+    public func latestIOSRuntime(supporting deviceTypeID: String? = nil) throws -> String? {
         let list: [[String: Any]] = try listValue("runtimes", key: "runtimes")
         return list
             .filter {
                 ($0["isAvailable"] as? Bool ?? false) && ($0["name"] as? String ?? "").hasPrefix("iOS")
+            }
+            .filter { runtime in
+                guard let deviceTypeID else { return true }
+                guard let supported = runtime["supportedDeviceTypes"] as? [[String: Any]] else {
+                    return false
+                }
+                return supported.contains { $0["identifier"] as? String == deviceTypeID }
             }
             .sorted {
                 ($0["version"] as? String ?? "").compare(

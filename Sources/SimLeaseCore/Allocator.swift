@@ -241,7 +241,7 @@ public struct Allocator {
             guard let deviceType = try simctl.preferredDeviceType(
                 from: order,
                 allowFallback: request.deviceName == nil),
-                  let runtime = try simctl.latestIOSRuntime() else {
+                  let runtime = try simctl.latestIOSRuntime(supporting: deviceType.id) else {
                 throw AllocatorError.noDeviceAvailable(
                     "no device type or iOS runtime found; active leases: \(registry.leases.count)")
             }

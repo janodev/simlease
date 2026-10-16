@@ -156,7 +156,7 @@ public struct SessionManager {
             guard let deviceType = try simctl.preferredDeviceType(
                 from: requestedNames,
                 allowFallback: request.deviceName == nil),
-                  let runtimeID = try simctl.latestIOSRuntime() else {
+                  let runtimeID = try simctl.latestIOSRuntime(supporting: deviceType.id) else {
                 throw AllocatorError.noDeviceAvailable("no matching device type or iOS runtime found")
             }
 

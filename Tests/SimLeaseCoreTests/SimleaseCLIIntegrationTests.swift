@@ -166,7 +166,7 @@ struct SimleaseCLIIntegrationTests {
                 '"identifier":"dt-17"}]}' ;;
               runtimes) printf '%s%s\n' \
                 '{"runtimes":[{"identifier":"rt-27","name":"iOS 27.0",' \
-                '"version":"27.0","isAvailable":true}]}' ;;
+                '"version":"27.0","isAvailable":true,"supportedDeviceTypes":[{"identifier":"dt-17"}]}]}' ;;
               *) exit 64 ;;
             esac
             ;;
