@@ -1,4 +1,8 @@
-PREFIX ?= /usr/local
+ifdef PREFIX
+BIN_DIR ?= $(PREFIX)/bin
+else
+BIN_DIR ?= $(HOME)/Developer/tools
+endif
 
 build:
 	swift build -c release
@@ -10,8 +14,8 @@ lint:
 	swiftlint lint --strict
 
 install: build
-	install -d $(PREFIX)/bin
-	install .build/release/simlease $(PREFIX)/bin/simlease
+	install -d "$(BIN_DIR)"
+	install .build/release/simlease "$(BIN_DIR)/simlease"
 
 app:
 	./scripts/make-app.sh

@@ -37,10 +37,13 @@ This is a private repository; cloning requires access to `janodev/simlease`.
 ```bash
 git clone https://github.com/janodev/simlease.git
 cd simlease
-make install          # installs the CLI; PREFIX=/usr/local by default
+make install          # installs the CLI at ~/Developer/tools/simlease
 make app              # builds dist/SimLease.app
 open dist/SimLease.app
 ```
+
+Add `~/Developer/tools` to `PATH`. Set `BIN_DIR` to choose another command
+directory; an explicit `PREFIX` still selects `PREFIX/bin`.
 
 Requires macOS 27+ and Xcode with an available iOS Simulator runtime.
 New simulators use the newest available iOS runtime whose supported device types
