@@ -8,20 +8,6 @@
   <img src="https://img.shields.io/badge/license-MIT-2dd4bf" alt="MIT license">
 </p>
 
-Run multiple coding agents on one Mac with less resource contention, lighter
-simulators, and less disk clutter. Competing builds and desktop UI tests take
-turns while independent work continues in parallel.
-
-- [AgentBuild](https://github.com/janodev/agentbuild) coordinates builds and tests, reuses caches, and records results.
-- [AgentLease](https://github.com/janodev/agentlease) coordinates access to shared resources, reducing contention and preventing conflicting work.
-- [SimLease](https://github.com/janodev/simlease) provides disposable simulators, cleans them up afterward, and queues macOS UI automation.
-- [SimSlim](https://github.com/janodev/simslim) disables unneeded Simulator background services to reduce memory use.
-
-AgentLease, SimLease, and SimSlim work independently. AgentBuild is a build driver
-that runs supported project workflows and coordinates the other tools as needed.
-
----
-
 When several coding agents build and test iOS apps in parallel, one can install
 over another's simulator, change its state, or close it mid-test. SimLease gives
 each complete workflow a private disposable simulator and keeps ownership for as
@@ -43,6 +29,20 @@ steal keyboard focus, move windows, or capture each other's screenshots.
 <p align="center">
   <img src="assets/hero.png" alt="Two simulator windows named after their tasks" width="85%">
 </p>
+
+## Companion tools
+
+Run multiple coding agents on one Mac with less resource contention, lighter
+simulators, and less disk clutter. Competing builds and desktop UI tests take
+turns while independent work continues in parallel.
+
+- [AgentBuild](https://github.com/janodev/agentbuild) coordinates builds and tests, reuses caches, and records results.
+- [AgentLease](https://github.com/janodev/agentlease) coordinates access to shared resources, reducing contention and preventing conflicting work.
+- [SimLease](https://github.com/janodev/simlease) provides disposable simulators, cleans them up afterward, and queues macOS UI automation.
+- [SimSlim](https://github.com/janodev/simslim) disables unneeded Simulator background services to reduce memory use.
+
+AgentLease, SimLease, and SimSlim work independently. AgentBuild is a build driver
+that runs supported project workflows and coordinates the other tools as needed.
 
 ## Install
 
