@@ -8,6 +8,19 @@
   <img src="https://img.shields.io/badge/license-MIT-2dd4bf" alt="MIT license">
 </p>
 
+These projects work together to coordinate coding agents on one Mac:
+
+- [AgentBuild](https://github.com/janodev/agentbuild) orchestrates project builds and tests, reuses caches, and saves execution evidence.
+- [AgentLease](https://github.com/janodev/agentlease) coordinates shared and exclusive access to named resources.
+- [SimLease](https://github.com/janodev/simlease) provides disposable Simulator sessions and exclusive macOS UI access.
+- [SimSlim](https://github.com/janodev/simslim) reduces Simulator overhead by disabling unneeded background services.
+
+AgentBuild uses AgentLease for shared build resources and SimLease for Simulator
+and macOS UI workflows. Selected Simulator routes also apply SimSlim to their
+leased device. AgentLease, SimLease, and SimSlim can each be used independently.
+
+---
+
 When several coding agents build and test iOS apps in parallel, one can install
 over another's simulator, change its state, or close it mid-test. SimLease gives
 each complete workflow a private disposable simulator and keeps ownership for as
