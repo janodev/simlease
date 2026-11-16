@@ -1,12 +1,3 @@
----
-type: Comparison Reference
-title: Improvements Over the Original Version
-description: Compares the original cooperative SimLease release with the current crash-safe foreground-session architecture.
-tags: [architecture, comparison, history, safety]
-timestamp: 2026-07-15T00:00:00Z
-status: current
----
-
 # Outcome
 
 SimLease changed from a cooperative lease tracker into a crash-safe Simulator
@@ -33,7 +24,7 @@ target is the current `main` branch.
 | Subprocess output | Large simultaneous stdout and stderr could deadlock. | Both pipes drain concurrently. |
 | Menu app | A basic synchronous lease board performed periodic reaping. | An Observation-based board loads status off the main actor, coalesces refreshes, presents errors, retries cleanup, focuses windows, copies UDIDs, and tears down resources. |
 | Agent workflow | Guidance recommended cooperative claims first. | Guidance prefers one `simlease run` boundary with `caffeinate`, exact UDIDs, deterministic UI-test state, and automatic cleanup. |
-| Evidence | Coverage and architecture guidance were limited. | Validation includes broad XCTest and Swift Testing coverage, strict lint, release and signed-app checks, real-Simulator smoke testing, and an OKF knowledge bundle. |
+| Evidence | Coverage and architecture guidance were limited. | Validation includes broad XCTest and Swift Testing coverage, strict lint, release and signed-app checks, real-Simulator smoke testing, and a documentation bundle. |
 
 # Compatibility Commands
 

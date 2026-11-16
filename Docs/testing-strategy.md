@@ -1,12 +1,3 @@
----
-type: Test Strategy
-title: Testing Strategy and Failure Matrix
-description: Records current evidence and remaining validation for cooperative leasing, kernel locking, session supervision, and recovery.
-tags: [testing, concurrency, fault-injection, simulator, recovery]
-timestamp: 2026-07-15T00:00:00Z
-status: current-guidance
----
-
 # Current Coverage
 
 The package uses both XCTest and Apple's Swift Testing framework. Current tests

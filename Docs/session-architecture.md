@@ -1,13 +1,3 @@
----
-type: Architecture Decision
-title: Foreground Session Architecture
-description: Defines the implemented simlease run lifecycle, ownership invariants, failure semantics, and remaining recovery work.
-tags: [architecture, sessions, locking, safety]
-timestamp: 2026-07-15T00:00:00Z
-status: implemented-v1
-implemented: true
----
-
 # User Contract
 
 The safe workflow entry point is:

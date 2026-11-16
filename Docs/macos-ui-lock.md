@@ -1,12 +1,3 @@
----
-type: Operational Playbook
-title: Exclusive macOS UI Automation
-description: Defines the host-wide lock that serializes macOS UI testing across cooperating agents.
-tags: [macos, ui-testing, concurrency, locking, agents]
-timestamp: 2026-10-12T00:00:00Z
-status: implemented
----
-
 # Purpose
 
 macOS UI automation shares one keyboard, pointer, frontmost application, window
