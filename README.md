@@ -1,12 +1,4 @@
-<p align="center">
-  <img src="assets/banner.svg" alt="SimLease — stop your AI agents from fighting over iOS simulators" width="100%">
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Swift-5.9+-F05138?logo=swift&logoColor=white" alt="Swift 5.9+">
-  <img src="https://img.shields.io/badge/macOS-27+-000000?logo=apple&logoColor=white" alt="macOS 27+">
-  <img src="https://img.shields.io/badge/license-MIT-2dd4bf" alt="MIT license">
-</p>
+# SimLease
 
 When several coding agents build and test iOS apps in parallel, one can install
 over another's simulator, change its state, or close it mid-test. SimLease gives
@@ -16,19 +8,15 @@ long as the workflow runs.
 For macOS UI testing, SimLease also provides one host-wide lock so agents do not
 steal keyboard focus, move windows, or capture each other's screenshots.
 
-- 🔒 **Crash-safe sessions** — `simlease run` creates a new simulator, retains a
+- **Crash-safe sessions** — `simlease run` creates a new simulator, retains a
   kernel lock, waits for boot readiness, supervises a command, then deletes the
   simulator.
-- 🖥️ **Exclusive macOS UI** — `simlease macos-ui` queues complete desktop UI
+- **Exclusive macOS UI** — `simlease macos-ui` queues complete desktop UI
   workflows behind one crash-released host lock.
-- 🏷️ **Recognizable windows** — session names include the task and a short
-  session ID, such as `🔒 checkout-redesign [A1B2C3D4] · iPhone 17 Pro`.
-- 📋 **A menubar board** — SimLease.app shows leases and session state, focuses
+- **Recognizable windows** — session names include the task, a short session ID,
+  and the device model.
+- **A menubar board** — SimLease.app shows leases and session state, focuses
   windows, reports status or cleanup errors, and can retry cleanup.
-
-<p align="center">
-  <img src="assets/hero.png" alt="Two simulator windows named after their tasks" width="85%">
-</p>
 
 ## Companion tools
 
@@ -141,7 +129,7 @@ The essential instruction is:
 
 ```markdown
 Run the whole simulator workflow under `simlease run --label "<task>" -- ...`.
-Use only the exported `SIMULATOR_ID`; never select or touch another 🔒 simulator.
+Use only the exported `SIMULATOR_ID`; never select or touch another session's simulator.
 ```
 
 Wrapping the whole workflow matters. Capturing a cooperative claim and running
@@ -162,16 +150,12 @@ unrelated commands later does not retain the crash-safe session lock.
 
 TTL never revokes a live session lock. One narrow gap remains: a crash after
 Simulator creation but before registry publication can leave an unregistered
-`🔒` device. It is excluded from allocation, but cannot yet be automatically
+SimLease device. It is excluded from allocation, but cannot yet be automatically
 proven safe to delete. See [current limitations](Docs/current-architecture.md).
 
 ## The menubar board
 
 SimLease.app is a menu-only utility that watches the shared registry:
-
-<p align="center">
-  <img src="assets/menubar.svg" alt="SimLease menubar board" width="80%">
-</p>
 
 - Shows boot state, label, device, agent, and session lifecycle state.
 - Focuses a selected Simulator window and copies its UDID.
