@@ -1,3 +1,12 @@
+---
+type: Development Playbook
+title: Development Workflow and Repository Conventions
+description: Guides safe changes to SimLease source, tests, documentation, and release artifacts.
+tags: [development, workflow, repository, review]
+timestamp: 2026-07-15T00:00:00Z
+status: current-guidance
+---
+
 # Start Here
 
 Read [current architecture](current-architecture.md) and
@@ -127,7 +136,8 @@ Before merging a locking, session, or recovery change, verify:
 
 # Documentation Maintenance
 
-`Docs/index.md` is the progressive-disclosure index. Keep Markdown documentation
-free of YAML frontmatter. Update the relevant concept and the
+`Docs/index.md` is the progressive-disclosure index and has no frontmatter.
+Every other Markdown document in `Docs` requires OKF frontmatter with a nonempty
+`type`. Update the relevant concept and the
 [decision log](roadmap-and-decisions.md) when an invariant, delivery status, or
 accepted choice changes.

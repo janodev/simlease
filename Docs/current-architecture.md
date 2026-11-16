@@ -1,3 +1,12 @@
+---
+type: Architecture Reference
+title: Current Architecture and Limitations
+description: Describes Simulator sessions, the macOS UI gate, cooperative leases, ownership authority, and recovery boundaries.
+tags: [architecture, current-state, concurrency, recovery]
+timestamp: 2026-07-15T00:00:00Z
+status: implemented
+---
+
 # Scope
 
 This document describes the current source. The foreground session runner was

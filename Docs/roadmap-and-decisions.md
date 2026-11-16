@@ -1,3 +1,12 @@
+---
+type: Roadmap
+title: Session Safety Roadmap and Decision Log
+description: Records implemented session milestones, remaining recovery work, future proposals, and settled safety choices.
+tags: [roadmap, decisions, sessions, reliability]
+timestamp: 2026-07-15T00:00:00Z
+status: active
+---
+
 # Status Vocabulary
 
 * **Implemented** - Present in source and covered at an appropriate current test
