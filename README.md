@@ -217,3 +217,6 @@ indexed in [`Docs/index.md`](Docs/index.md).
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Based on [SimLease by Alexis Santos](https://github.com/alexissan/simlease).
+The original copyright notice is retained in [LICENSE](LICENSE).
